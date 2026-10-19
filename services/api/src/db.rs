@@ -789,6 +789,32 @@ impl Database {
         Ok(())
     }
 
+    /// Cancel a market by setting its status to `cancelled`.
+    ///
+    /// Returns an error if the market does not exist or is not in `active` status.
+    pub async fn cancel_market(&self, market_id: i64) -> anyhow::Result<()> {
+        let rows_affected = self
+            .with_timeout(
+                "cancel_market",
+                sqlx::query(
+                    "UPDATE markets \
+                     SET status = 'cancelled' \
+                     WHERE id = $1 AND status = 'active' AND deleted_at IS NULL",
+                )
+                .bind(market_id)
+                .execute(&self.pool),
+            )
+            .await
+            .map_err(anyhow::Error::from)?
+            .rows_affected();
+
+        if rows_affected == 0 {
+            anyhow::bail!("market {market_id} not found or not in active status");
+        }
+
+        Ok(())
+    }
+
     /// Ping the database with a bounded timeout. Returns Ok(()) if reachable.
     pub async fn ping(&self) -> anyhow::Result<()> {
         tokio::time::timeout(

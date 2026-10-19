@@ -1124,6 +1124,16 @@ pub enum InvalidationTag {
         network: String,
         featured_limit: i64,
     },
+
+    /// A market was cancelled.
+    ///
+    /// Invalidates the per-market chain entry, the oracle result, and the
+    /// aggregate statistics / featured-markets lists.
+    MarketCancelled {
+        market_id: i64,
+        network: String,
+        featured_limit: i64,
+    },
 }
 
 impl InvalidationTag {
@@ -1131,6 +1141,11 @@ impl InvalidationTag {
     pub fn cache_keys(&self) -> Vec<String> {
         match self {
             InvalidationTag::MarketResolved {
+                market_id,
+                network,
+                featured_limit,
+            }
+            | InvalidationTag::MarketCancelled {
                 market_id,
                 network,
                 featured_limit,

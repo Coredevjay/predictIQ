@@ -18,6 +18,7 @@ mod tests {
         ("GET", "/api/v1/markets/featured"),
         ("GET", "/api/v1/content"),
         ("POST", "/api/v1/markets/{market_id}/resolve"),
+        ("POST", "/api/v1/markets/{market_id}/cancel"),
         ("GET", "/api/v1/blockchain/health"),
         ("GET", "/api/v1/blockchain/markets/{market_id}"),
         ("GET", "/api/v1/blockchain/stats"),
@@ -44,6 +45,7 @@ mod tests {
     /// Admin routes that must declare ApiKeyAuth security in the spec.
     const ADMIN_ROUTES: &[(&str, &str)] = &[
         ("POST", "/api/v1/markets/{market_id}/resolve"),
+        ("POST", "/api/v1/markets/{market_id}/cancel"),
         ("GET", "/api/v1/email/preview/{template_name}"),
         ("POST", "/api/v1/email/test"),
         ("GET", "/api/v1/email/analytics"),
@@ -170,6 +172,7 @@ mod tests {
     fn admin_routes_have_security_in_spec() {
         let admin_operation_ids = [
             "resolveMarket",
+            "cancelMarket",
             "emailPreview",
             "emailSendTest",
             "getEmailAnalytics",

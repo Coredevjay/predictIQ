@@ -37,6 +37,7 @@ type HttpMethod = "GET" | "POST" | "DELETE";
  */
 const PATHS = {
   resolveMarket: "/api/v1/markets/{market_id}/resolve",
+  cancelMarket: "/api/v1/markets/{market_id}/cancel",
   blockchainReplay: "/api/blockchain/replay",
   content: "/api/v1/content",
   auditLogs: "/api/v1/audit/logs",
@@ -360,6 +361,13 @@ export const api = {
     request<components['schemas']['InvalidationResult']>(
       "POST",
       fillPath(PATHS.resolveMarket, 'market_id', marketId),
+      { cacheTags: [CacheTag.MARKETS, CacheTag.BLOCKCHAIN, CacheTag.STATISTICS], signal },
+    ),
+
+  cancelMarket: (marketId: number | string, signal?: AbortSignal) =>
+    request<components['schemas']['InvalidationResult']>(
+      "POST",
+      fillPath(PATHS.cancelMarket, 'market_id', marketId),
       { cacheTags: [CacheTag.MARKETS, CacheTag.BLOCKCHAIN, CacheTag.STATISTICS], signal },
     ),
 

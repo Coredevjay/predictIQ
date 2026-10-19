@@ -1201,6 +1201,60 @@ pub async fn resolve_market(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/markets/{market_id}/cancel",
+    tag = "markets",
+    params(
+        ("market_id" = i64, Path, description = "Market database ID"),
+    ),
+    responses(
+        (status = 200, description = "Market cancelled and cache invalidated", body = InvalidationResult),
+        (status = 400, description = "Bad request", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError),
+    ),
+    security(("api_key" = []))
+)]
+pub async fn cancel_market(
+    State(state): State<Arc<AppState>>,
+    Path(market_id): Path<i64>,
+) -> Result<impl IntoResponse, ApiError> {
+    // 1. Persist the cancellation to the database.
+    state
+        .db
+        .cancel_market(market_id)
+        .await
+        .map_err(into_api_error)?;
+
+    // 2. Invalidate only the keys affected by this market's cancellation via tag.
+    let tag = InvalidationTag::MarketCancelled {
+        market_id,
+        network: state.config.network_name().to_owned(),
+        featured_limit: state.config.featured_limit,
+    };
+
+    let (invalidated, cache_invalidated) = match state.cache.invalidate_tag(&tag).await {
+        Ok(count) => {
+            state.metrics.observe_invalidation("market_cancel", count);
+            tracing::info!(market_id, count, "market cancelled and cache invalidated");
+            (count, true)
+        }
+        Err(e) => {
+            tracing::warn!(market_id, error = %e, "cache invalidation failed after successful cancel DB write");
+            state.metrics.observe_invalidation("market_cancel", 0);
+            (0, false)
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(InvalidationResult {
+            invalidated_keys: invalidated,
+            cache_invalidated,
+        }),
+    ))
+}
+
 pub async fn metrics(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     state.db.record_pool_metrics();
     let body = state.metrics.render().map_err(into_api_error)?;
