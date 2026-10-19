@@ -193,23 +193,31 @@ pub enum ErrorCode {
     /// The operation would reduce the guardian set below the required minimum.
     BelowMinimumGuardianCount = 162,
 
+    /// The governance token reports a decimals value that is invalid or unsupported
+    /// (e.g. above the maximum allowed for safe weight normalisation).
+    InvalidTokenDecimals = 163,
+
+    /// The per-market dispute voter registry has reached its maximum size and cannot
+    /// accept additional voters.
+    TooManyDisputeVoters = 164,
+
     /// The provided token does not match the market's expected token.
-    InvalidToken = 163,
+    InvalidToken = 165,
 
     /// The caller has already voted on this guardian removal proposal.
-    AlreadyVotedOnRemoval = 164,
+    AlreadyVotedOnRemoval = 166,
 
     /// No guardian removal proposal is pending for the given target.
-    RemovalNotPending = 165,
+    RemovalNotPending = 167,
 
     /// The guardian removal proposal's voting period has expired.
-    RemovalExpired = 166,
+    RemovalExpired = 168,
 
     /// The bet amount is below the configured minimum bet amount.
-    MinimumBetNotMet = 167,
+    MinimumBetNotMet = 169,
 
     /// The provided base fee is outside the allowed range (0 to 10_000 bps).
-    InvalidBaseFee = 168,
+    InvalidBaseFee = 170,
 
     /// A dispute bond is required to file a dispute; the caller did not provide a sufficient bond.
     DisputeBondRequired = 200,

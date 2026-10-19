@@ -12,7 +12,7 @@
 ///   - Per-user LockedBalance tracking prevents pool drain
 use crate::errors::ErrorCode;
 use crate::modules::{markets, voting};
-use crate::types::{ConfigKey, MarketStatus, MarketTier, OracleConfig};
+use crate::types::{ConfigKey, LockedTokens, MarketStatus, MarketTier, OracleConfig};
 use crate::{PredictIQ, PredictIQClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -327,6 +327,135 @@ fn test_snapshot_ledger_set_at_dispute_time() {
         market.dispute_timestamp.is_some(),
         "dispute_timestamp must be set when dispute is filed"
     );
+}
+
+// ── Issue #1694: vote revision must not re-lock tokens ────────────────────────
+
+/// Seed a fallback-path lock for `voter` and record the vote weight.
+fn seed_fallback_lock(
+    env: &Env,
+    contract_addr: &Address,
+    market_id: u64,
+    voter: &Address,
+    outcome: u32,
+    weight: i128,
+) {
+    env.as_contract(contract_addr, || {
+        let unlock_time = env.ledger().timestamp() + 86_400;
+        env.storage().persistent().set(
+            &voting::DataKey::LockedTokens(voter.clone()),
+            &LockedTokens {
+                amount: weight,
+                unlock_time,
+            },
+        );
+        env.storage()
+            .persistent()
+            .set(&voting::DataKey::LockedBalance(voter.clone()), &weight);
+        env.storage().persistent().set(
+            &voting::DataKey::VoteRecord(market_id, voter.clone()),
+            &(outcome, weight),
+        );
+        let tally_key = voting::DataKey::VoteTally(market_id, outcome);
+        let current: i128 = env.storage().persistent().get(&tally_key).unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&tally_key, &(current + weight));
+    });
+}
+
+/// Revising a fallback-path vote must reuse the existing lock: the locked
+/// balance must stay equal to the lock record amount and the tally must only
+/// reflect the latest weight.
+#[test]
+fn test_fallback_vote_revision_does_not_relock() {
+    let (env, client, admin, contract_addr) = setup();
+    let market_id = setup_disputed_market(&env, &client, &contract_addr, &admin);
+    let voter = Address::generate(&env);
+
+    // Initial vote: outcome 0 with weight 100.
+    seed_fallback_lock(&env, &contract_addr, market_id, &voter, 0, 100);
+
+    // Revise several times, alternating outcomes and weights.
+    let revisions: [(u32, i128); 3] = [(1, 100), (0, 100), (1, 100)];
+    for (outcome, weight) in revisions.iter() {
+        env.as_contract(&contract_addr, || {
+            voting::apply_vote_revision(&env, market_id, &voter, *outcome, *weight)
+                .expect("revision should succeed");
+        });
+    }
+
+    env.as_contract(&contract_addr, || {
+        let locked_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&voting::DataKey::LockedBalance(voter.clone()))
+            .unwrap_or(0);
+        let lock: LockedTokens = env
+            .storage()
+            .persistent()
+            .get(&voting::DataKey::LockedTokens(voter.clone()))
+            .expect("lock record must exist");
+
+        assert_eq!(
+            locked_balance, lock.amount,
+            "LockedBalance must equal LockedTokens.amount after revisions"
+        );
+        assert_eq!(
+            lock.amount, 100,
+            "revisions must not grow the locked amount"
+        );
+
+        // Only the latest outcome carries the weight.
+        assert_eq!(voting::get_tally(&env, market_id, 0), 0);
+        assert_eq!(voting::get_tally(&env, market_id, 1), 100);
+    });
+}
+
+// ── Issue #1695: governance token decimals must be bounded ───────────────────
+
+/// Decimals above the supported bound must be rejected instead of panicking.
+#[test]
+fn test_governance_decimals_above_bound_rejected() {
+    let (env, _client, _admin, contract_addr) = setup();
+    env.as_contract(&contract_addr, || {
+        let result = voting::normalize_weight(&env, 1_000, 57);
+        assert_eq!(result, Err(ErrorCode::InvalidGovernanceDecimals));
+        let result = voting::normalize_weight(&env, 1_000, i128::MAX);
+        assert_eq!(result, Err(ErrorCode::InvalidGovernanceDecimals));
+    });
+}
+
+/// A failing `decimals()` call must surface an error rather than defaulting.
+#[test]
+fn test_governance_decimals_failure_returns_error() {
+    let (env, _client, _admin, contract_addr) = setup();
+    env.as_contract(&contract_addr, || {
+        // A token address with no contract deployed cannot report decimals.
+        let bogus = Address::generate(&env);
+        let result = voting::read_governance_decimals(&env, &bogus);
+        assert!(
+            result.is_err(),
+            "decimals() failure must not silently default"
+        );
+    });
+}
+
+/// Normal decimals values still normalize weight correctly.
+#[test]
+fn test_governance_decimals_normalization() {
+    let (env, _client, _admin, contract_addr) = setup();
+    env.as_contract(&contract_addr, || {
+        // 18 decimals is the canonical unit: weight passes through unchanged.
+        assert_eq!(voting::normalize_weight(&env, 1_000, 18), Ok(1_000));
+        // 7 decimals (e.g. Stellar classic assets) scale up by 10^11.
+        assert_eq!(
+            voting::normalize_weight(&env, 1, 7),
+            Ok(100_000_000_000)
+        );
+        // 20 decimals scale down by 10^2.
+        assert_eq!(voting::normalize_weight(&env, 1_000, 20), Ok(10));
+    });
 }
 
 // ── Issue #1697: dispute bond tests ───────────────────────────────────────────
