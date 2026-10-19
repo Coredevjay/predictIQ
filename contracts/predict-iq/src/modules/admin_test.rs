@@ -298,3 +298,41 @@ fn test_remove_guardian_allowed_after_previous_expired() {
         remove_guardian(&e, target2.clone()).unwrap();
     });
 }
+
+// --- Initialization guards (issue #1680) ---
+//
+// `initialize` must require authorization from the admin address being
+// installed (so a front-runner cannot seize the admin role) and must reject
+// out-of-range `base_fee` values.
+
+#[test]
+fn test_initialize_requires_admin_auth() {
+    let e = Env::default();
+    // Deliberately do NOT mock auths: the admin has not authorized the call.
+    let contract_id = e.register_contract(None, PredictIQ);
+    let client = PredictIQClient::new(&e, &contract_id);
+    let admin = Address::generate(&e);
+
+    let result = client.try_initialize(&admin, &100);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_initialize_rejects_base_fee_above_max() {
+    let (e, contract_id) = setup();
+    let client = PredictIQClient::new(&e, &contract_id);
+    let admin = Address::generate(&e);
+
+    let result = client.try_initialize(&admin, &10_001);
+    assert_eq!(result, Err(Ok(ErrorCode::FeeTooHigh)));
+}
+
+#[test]
+fn test_initialize_accepts_max_base_fee() {
+    let (e, contract_id) = setup();
+    let client = PredictIQClient::new(&e, &contract_id);
+    let admin = Address::generate(&e);
+
+    let result = client.try_initialize(&admin, &10_000);
+    assert!(result.is_ok());
+}

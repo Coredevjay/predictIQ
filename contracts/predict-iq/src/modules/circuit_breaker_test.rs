@@ -303,3 +303,38 @@ fn test_half_open_trips_back_to_open_after_max_ops() {
     let r = make_attempt();
     assert_eq!(r, Err(Ok(ErrorCode::ContractPaused)));
 }
+
+// Issue #1685: token-egress paths must respect the circuit breaker
+
+#[test]
+fn test_pause_blocks_withdraw_protocol_fees_and_claim_referral_rewards() {
+    let (env, client, _admin, _guardian) = setup();
+
+    let recipient = Address::generate(&env);
+    let referrer = Address::generate(&env);
+
+    client.pause();
+
+    let withdraw_result = client.try_withdraw_protocol_fees(&recipient);
+    assert_eq!(withdraw_result, Err(Ok(ErrorCode::ContractPaused)));
+
+    let claim_result = client.try_claim_referral_rewards(&referrer);
+    assert_eq!(claim_result, Err(Ok(ErrorCode::ContractPaused)));
+}
+
+#[test]
+fn test_unpause_allows_withdraw_protocol_fees_and_claim_referral_rewards() {
+    let (env, client, _admin, _guardian) = setup();
+
+    let recipient = Address::generate(&env);
+    let referrer = Address::generate(&env);
+
+    client.pause();
+    client.unpause();
+
+    let withdraw_result = client.try_withdraw_protocol_fees(&recipient);
+    assert_ne!(withdraw_result, Err(Ok(ErrorCode::ContractPaused)));
+
+    let claim_result = client.try_claim_referral_rewards(&referrer);
+    assert_ne!(claim_result, Err(Ok(ErrorCode::ContractPaused)));
+}

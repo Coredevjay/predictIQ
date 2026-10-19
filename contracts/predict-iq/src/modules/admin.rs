@@ -8,6 +8,17 @@ fn bump_gov_ttl(e: &Env, key: &ConfigKey) {
         .extend_ttl(key, GOV_TTL_LOW_THRESHOLD, GOV_TTL_HIGH_THRESHOLD);
 }
 
+/// Low-level storage writer for the Admin slot. This does **not** perform any
+/// authorization check; callers must verify auth before invoking it.
+///
+/// Trusted callers:
+/// - `accept_admin` — the incoming admin has already called `require_auth()`
+///   and matched the pending transfer.
+/// - `initialize` (in `lib.rs`) — the incoming admin's `require_auth()` is
+///   performed before this is called, so a front-runner cannot install
+///   themselves as admin.
+///
+/// Do not call this from any other path without an explicit auth check.
 pub fn set_admin(e: &Env, admin: Address) {
     e.storage().persistent().set(&ConfigKey::Admin, &admin);
     bump_gov_ttl(e, &ConfigKey::Admin);

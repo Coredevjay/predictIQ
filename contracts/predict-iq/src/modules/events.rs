@@ -227,13 +227,6 @@ pub fn emit_referral_claimed(e: &Env, market_id: u64, claimer: Address, amount: 
     );
 }
 
-pub fn emit_referral_distribution(e: &Env, market_id: u64, token: Address) {
-    e.events().publish(
-        (symbol_short!("ref_dist"), market_id, token),
-        (EVENT_VERSION,),
-    );
-}
-
 pub fn emit_circuit_breaker_auto(e: &Env, contract_address: Address, error_count: u32) {
     e.events().publish(
         (symbol_short!("cb_auto"), 0u64, contract_address),

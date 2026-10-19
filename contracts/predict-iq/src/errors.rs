@@ -193,6 +193,9 @@ pub enum ErrorCode {
     /// The operation would reduce the guardian set below the required minimum.
     BelowMinimumGuardianCount = 162,
 
+    /// The provided base fee is outside the allowed range (0 to 10_000 bps).
+    InvalidBaseFee = 163,
+
     /// A dispute bond is required to file a dispute; the caller did not provide a sufficient bond.
     DisputeBondRequired = 200,
 

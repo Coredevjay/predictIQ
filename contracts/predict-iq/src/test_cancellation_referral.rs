@@ -324,3 +324,113 @@ fn test_mixed_referred_and_non_referred_bets_all_consistent_after_cancellation()
         plain_balance_after_bet + plain_amount
     );
 }
+
+/// 8. Issue #1686: the referrer is locked on the FIRST bet for a
+///    (market, bettor, outcome) and is never overwritten by later bets.
+///
+/// Two bets by the same bettor on the same outcome with two different
+/// referrers: only the first referrer is credited. After cancellation the
+/// first referrer's balance must be zero (their reward is reversed) and the
+/// second referrer must never have been credited at all.
+#[test]
+fn test_referrer_locked_on_first_bet_not_overwritten() {
+    let ctx = TestCtx::new();
+    let market_id = ctx.create_market();
+
+    let referrer_first = Address::generate(&ctx.env);
+    let referrer_second = Address::generate(&ctx.env);
+
+    // Same bettor, same outcome, two bets with different referrers.
+    let bettor = Address::generate(&ctx.env);
+    let first_amount = 10_000i128;
+    let second_amount = 20_000i128;
+
+    token::StellarAssetClient::new(&ctx.env, &ctx.token)
+        .mint(&bettor, &(first_amount + second_amount));
+
+    ctx.client.place_bet(
+        &bettor,
+        &market_id,
+        &0u32,
+        &first_amount,
+        &ctx.token,
+        &Some(referrer_first.clone()),
+    );
+    ctx.client.place_bet(
+        &bettor,
+        &market_id,
+        &0u32,
+        &second_amount,
+        &ctx.token,
+        &Some(referrer_second.clone()),
+    );
+
+    // The second referrer must never have been credited: the referrer is
+    // locked to the first bet for this (market, bettor, outcome).
+    assert_eq!(
+        ctx.referrer_balance(&referrer_second),
+        0,
+        "second referrer must not be credited when referrer is already locked"
+    );
+
+    ctx.client.cancel_market_admin(&market_id);
+
+    // First (locked) referrer's reward must be fully reversed.
+    assert_eq!(
+        ctx.referrer_balance(&referrer_first),
+        0,
+        "locked referrer balance must be zero after cancellation"
+    );
+    assert_eq!(
+        ctx.referrer_balance(&referrer_second),
+        0,
+        "second referrer balance must remain zero after cancellation"
+    );
+
+    // Bettor still gets the full gross refund for both bets.
+    let refund = ctx.client.withdraw_refund(&bettor, &market_id);
+    assert_eq!(
+        refund,
+        first_amount + second_amount,
+        "bettor must receive 100% of both stakes back"
+    );
+}
+
+/// 9. Issue #1687: per-bet reward rounding must not drift on reversal.
+///
+/// With a 1% fee, a 1_500 stroop bet pays a 15 stroop fee, whose 10% reward
+/// floors to 1 stroop. Two such bets credit 2 stroops in total, whereas
+/// flooring the aggregate fee (30 stroops → 3) would credit 3. Cancellation
+/// must subtract exactly what was credited, netting to zero.
+#[test]
+fn test_referral_reward_rounding_no_drift_on_reversal() {
+    let ctx = TestCtx::new();
+    let market_id = ctx.create_market();
+
+    let referrer = Address::generate(&ctx.env);
+
+    // 1% of 1_500 = 15 stroops fee per bet; 10% of 15 floors to 1 stroop.
+    let bet_amount = 1_500i128;
+    let bettor = ctx.mint_and_bet(market_id, 0, bet_amount, Some(&referrer));
+    ctx.mint_and_bet(market_id, 0, bet_amount, Some(&referrer));
+
+    // Two per-bet rewards of 1 stroop each (not floor(30 * 10 / 100) = 3).
+    let credited = ctx.referrer_balance(&referrer);
+    assert_eq!(
+        credited, 2,
+        "per-bet rewards must be summed individually (1 + 1), not floored on the aggregate"
+    );
+
+    ctx.client.cancel_market_admin(&market_id);
+
+    // Reversal must subtract exactly the credited amount, leaving zero.
+    assert_eq!(
+        ctx.referrer_balance(&referrer),
+        0,
+        "add-then-reverse must net to exactly zero (no rounding drift)"
+    );
+
+    // And the bettors are made whole.
+    let refund = ctx.client.withdraw_refund(&bettor, &market_id);
+    assert_eq!(refund, bet_amount, "bettor must receive full gross refund");
+}

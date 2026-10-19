@@ -36,6 +36,10 @@ pub enum DataKey {
     Bet(u64, Address, u32),         // market_id, bettor, outcome
     Claimed(u64, Address),          // market_id, bettor — set after claim
     BetReferrer(u64, Address, u32), // market_id, bettor, outcome — referrer at bet time
+    /// Issue #1686/#1687: accumulated referral reward credited for this
+    /// (market, bettor, outcome). Stored so cancellation can reverse exactly
+    /// what was added, against the referrer that actually earned it.
+    BetReferralReward(u64, Address, u32),
 }
 
 /// Extend the TTL of a bet record to BET_TTL_HIGH_THRESHOLD.
@@ -165,15 +169,45 @@ pub fn place_bet(
     markets::update_market(e, market);
     markets::bump_market_ttl(e, market_id);
 
-    // Track referral reward — 10% of the protocol fee goes to the referrer.
-    if let Some(ref r) = referrer {
-        if fee > 0 {
-            crate::modules::fees::add_referral_reward(e, r, &token_address, fee)?;
+    // Track referral reward — a share of the protocol fee goes to the referrer.
+    //
+    // Issue #1686: the referrer is locked on the first bet for a
+    // (market, bettor, outcome) key. Later bets that pass a different referrer
+    // do not overwrite it, so cancellation reverses the reward against the
+    // referrer that actually earned it.
+    //
+    // Issue #1687: the exact reward credited is accumulated in
+    // `BetReferralReward` so reversal subtracts precisely what was added,
+    // avoiding rounding drift from recomputing the share on the aggregate fee.
+    let referrer_key = DataKey::BetReferrer(market_id, bettor.clone(), outcome);
+    let locked_referrer: Option<Address> = e.storage().persistent().get(&referrer_key);
+
+    let effective_referrer = match locked_referrer {
+        Some(r) => Some(r),
+        None => {
+            if let Some(ref r) = referrer {
+                e.storage().persistent().set(&referrer_key, r);
+                bump_bet_ttl(e, &referrer_key);
+                Some(r.clone())
+            } else {
+                None
+            }
         }
-        // Store referrer so cancellation can reverse the reward if needed.
-        let referrer_key = DataKey::BetReferrer(market_id, bettor.clone(), outcome);
-        e.storage().persistent().set(&referrer_key, r);
-        bump_bet_ttl(e, &referrer_key);
+    };
+
+    if let Some(r) = effective_referrer {
+        if fee > 0 {
+            let reward = crate::modules::fees::add_referral_reward(e, &r, &token_address, fee)?;
+            if reward > 0 {
+                let reward_key = DataKey::BetReferralReward(market_id, bettor.clone(), outcome);
+                let accumulated: i128 = e.storage().persistent().get(&reward_key).unwrap_or(0);
+                let new_total = accumulated
+                    .checked_add(reward)
+                    .ok_or(ErrorCode::ArithmeticOverflow)?;
+                e.storage().persistent().set(&reward_key, &new_total);
+                bump_bet_ttl(e, &reward_key);
+            }
+        }
     }
 
     // Emit standardized BetPlaced event
@@ -199,6 +233,40 @@ pub fn get_bet_referrer(e: &Env, market_id: u64, bettor: Address, outcome: u32) 
 pub fn remove_bet_referrer(e: &Env, market_id: u64, bettor: &Address, outcome: u32) {
     let key = DataKey::BetReferrer(market_id, bettor.clone(), outcome);
     e.storage().persistent().remove(&key);
+    // Issue #1686/#1687: also clear the accumulated referral reward record.
+    let reward_key = DataKey::BetReferralReward(market_id, bettor.clone(), outcome);
+    e.storage().persistent().remove(&reward_key);
+}
+
+/// Reverses the referral reward credited for a (market, bettor, outcome) key.
+///
+/// Issue #1686: reverses against the referrer locked at first bet time, not
+/// whichever referrer was passed most recently.
+/// Issue #1687: reverses the exact accumulated reward rather than recomputing
+/// the share from the aggregate fee, so add/reverse cannot drift.
+pub fn reverse_referral_reward_for_bet(
+    e: &Env,
+    market_id: u64,
+    bettor: &Address,
+    outcome: u32,
+    token_address: &Address,
+) -> Result<(), ErrorCode> {
+    let referrer_key = DataKey::BetReferrer(market_id, bettor.clone(), outcome);
+    let reward_key = DataKey::BetReferralReward(market_id, bettor.clone(), outcome);
+
+    let referrer: Option<Address> = e.storage().persistent().get(&referrer_key);
+    let reward: i128 = e.storage().persistent().get(&reward_key).unwrap_or(0);
+
+    if let Some(r) = referrer {
+        if reward > 0 {
+            crate::modules::fees::reverse_referral_reward(e, &r, token_address, reward)?;
+        }
+    }
+
+    e.storage().persistent().remove(&referrer_key);
+    e.storage().persistent().remove(&reward_key);
+
+    Ok(())
 }
 
 /// Issue #1698: guard against a `Resolved` market whose winning outcome has no
@@ -254,6 +322,11 @@ fn internal_claim_amount(
                 DataKey::Bet(_, _, outcome) => *outcome,
                 _ => return Ok(amount),
             };
+
+            // Issue #1686/#1687: reverse the exact referral reward credited for
+            // this bet against the referrer that was locked at first bet time.
+            reverse_referral_reward_for_bet(e, market_id, bettor, outcome, token_address)?;
+
             let current = markets::get_outcome_bet_count(&market, outcome);
             if current > 0 {
                 markets::set_outcome_bet_count(&mut market, outcome, current - 1);
