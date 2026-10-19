@@ -390,6 +390,10 @@ pub fn set_creator_reputation(
     Ok(())
 }
 
+/// Issue #1683: Upper bound for admin-configurable creation deposit / fee.
+/// Guards against absurd values that would make market creation unusable.
+pub const MAX_CREATION_AMOUNT: i128 = 1_000_000_000_000_000_000;
+
 pub fn get_creation_deposit(e: &Env) -> i128 {
     e.storage()
         .persistent()
@@ -399,6 +403,11 @@ pub fn get_creation_deposit(e: &Env) -> i128 {
 
 pub fn set_creation_deposit(e: &Env, amount: i128) -> Result<(), ErrorCode> {
     crate::modules::admin::require_admin(e)?;
+    // Issue #1683: reject negative amounts (and amounts above the configured
+    // upper bound) so a bad admin write cannot brick market creation.
+    if amount < 0 || amount > MAX_CREATION_AMOUNT {
+        return Err(ErrorCode::InvalidAmount);
+    }
     e.storage()
         .persistent()
         .set(&ConfigKey::CreationDeposit, &amount);
@@ -416,6 +425,11 @@ pub fn get_creation_fee(e: &Env) -> i128 {
 /// Issue #507: Set market creation fee (admin only)
 pub fn set_creation_fee(e: &Env, amount: i128) -> Result<(), ErrorCode> {
     crate::modules::admin::require_admin(e)?;
+    // Issue #1683: reject negative amounts (and amounts above the configured
+    // upper bound) so a bad admin write cannot brick market creation.
+    if amount < 0 || amount > MAX_CREATION_AMOUNT {
+        return Err(ErrorCode::InvalidAmount);
+    }
     e.storage()
         .persistent()
         .set(&ConfigKey::CreationFee, &amount);
@@ -647,5 +661,89 @@ mod markets_prune_tests {
 
         // The market record itself is gone too, as before this fix.
         assert!(get_market(&e, market_id).is_none());
+    }
+
+    // ---- Issue #1683: creation deposit / fee range validation ----
+
+    fn setup_admin(e: &Env) -> Address {
+        let admin = Address::generate(e);
+        crate::modules::admin::set_admin(e, &admin).unwrap();
+        admin
+    }
+
+    #[test]
+    fn set_creation_deposit_rejects_negative() {
+        let e = Env::default();
+        e.mock_all_auths();
+        setup_admin(&e);
+
+        assert_eq!(
+            set_creation_deposit(&e, -1),
+            Err(ErrorCode::InvalidAmount)
+        );
+        assert_eq!(get_creation_deposit(&e), 0);
+    }
+
+    #[test]
+    fn set_creation_deposit_rejects_above_upper_bound() {
+        let e = Env::default();
+        e.mock_all_auths();
+        setup_admin(&e);
+
+        assert_eq!(
+            set_creation_deposit(&e, MAX_CREATION_AMOUNT + 1),
+            Err(ErrorCode::InvalidAmount)
+        );
+        assert_eq!(get_creation_deposit(&e), 0);
+    }
+
+    #[test]
+    fn set_creation_deposit_accepts_valid_amount() {
+        let e = Env::default();
+        e.mock_all_auths();
+        setup_admin(&e);
+
+        set_creation_deposit(&e, 500).unwrap();
+        assert_eq!(get_creation_deposit(&e), 500);
+
+        // Zero is a valid amount (disables the deposit).
+        set_creation_deposit(&e, 0).unwrap();
+        assert_eq!(get_creation_deposit(&e), 0);
+    }
+
+    #[test]
+    fn set_creation_fee_rejects_negative() {
+        let e = Env::default();
+        e.mock_all_auths();
+        setup_admin(&e);
+
+        assert_eq!(set_creation_fee(&e, -1), Err(ErrorCode::InvalidAmount));
+        assert_eq!(get_creation_fee(&e), 0);
+    }
+
+    #[test]
+    fn set_creation_fee_rejects_above_upper_bound() {
+        let e = Env::default();
+        e.mock_all_auths();
+        setup_admin(&e);
+
+        assert_eq!(
+            set_creation_fee(&e, MAX_CREATION_AMOUNT + 1),
+            Err(ErrorCode::InvalidAmount)
+        );
+        assert_eq!(get_creation_fee(&e), 0);
+    }
+
+    #[test]
+    fn set_creation_fee_accepts_valid_amount() {
+        let e = Env::default();
+        e.mock_all_auths();
+        setup_admin(&e);
+
+        set_creation_fee(&e, 250).unwrap();
+        assert_eq!(get_creation_fee(&e), 250);
+
+        set_creation_fee(&e, 0).unwrap();
+        assert_eq!(get_creation_fee(&e), 0);
     }
 }

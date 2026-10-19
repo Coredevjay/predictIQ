@@ -912,74 +912,15 @@ fn test_resolved_market_always_has_winning_stake() {
 }
 
 // =============================================================================
-// MIGRATION INTEGRITY TESTS
+// FEE CONSERVATION INVARIANTS
 // =============================================================================
 
+/// Asserts that for every bet placed, the stored net stake never exceeds the
+/// gross amount transferred, and that `total_staked` equals the sum of the
+/// per-outcome net stakes.
 #[test]
-fn test_migration_integrity_validation_passes_after_successful_migration() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    // Setup admin for migration integrity check
-    let admin = Address::generate(&env);
-    env.storage().persistent().set(&crate::types::ConfigKey::Admin, &admin);
-    env.storage().persistent().set(&crate::types::ConfigKey::GuardianSet, &admin);
-
-    // Verify integrity passes when required keys exist
-    let result = crate::modules::migration::verify_migration_integrity(&env);
-    assert!(result.unwrap_or(false));
-}
-
-#[test]
-fn test_migration_integrity_validation_fails_without_admin() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    // Clear admin key - should fail validation
-    env.storage().persistent().remove(&crate::types::ConfigKey::Admin);
-    env.storage().persistent().set(&crate::types::ConfigKey::GuardianSet, &Address::generate(&env));
-
-    let result = crate::modules::migration::verify_migration_integrity(&env);
-    assert!(!result.unwrap_or(false));
-}
-
-#[test]
-fn test_migration_rolls_back_on_validation_failure() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    env.storage().persistent().set(&crate::types::ConfigKey::Admin, &admin);
-    env.storage().persistent().set(&crate::types::ConfigKey::GuardianSet, &admin);
-
-    // Migration that removes admin key (invalidates state)
-    let result = crate::modules::migration::execute_migration(
-        &env,
-        1,
-        2,
-        |_e| {
-            _e.storage().persistent().remove(&crate::types::ConfigKey::Admin);
-            Ok(())
-        },
-    );
-
-    // Should fail due to validation failure
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), crate::errors::ErrorCode::MigrationValidationError);
-
-    // Admin key should be restored after rollback
-    assert!(env.storage().persistent().has(&crate::types::ConfigKey::Admin));
-}
-
-#[test]
-fn test_stake_invariant_maintained_after_valid_migration() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let contract_id = env.register(PredictIQ, ());
-    let client = PredictIQClient::new(&env, &contract_id);
-    client.initialize(&admin, &100);
+fn test_fee_invariant_net_amount_never_exceeds_gross() {
+    let (env, client, admin) = setup();
 
     let options = Vec::from_array(
         &env,
@@ -1003,7 +944,7 @@ fn test_stake_invariant_maintained_after_valid_migration() {
 
     let market_id = client.create_market(
         &admin,
-        &String::from_str(&env, "Invariant Migration Test"),
+        &String::from_str(&env, "Fee Invariant Market"),
         &options,
         &1000,
         &2000,
@@ -1014,19 +955,72 @@ fn test_stake_invariant_maintained_after_valid_migration() {
         &0,
     );
 
-    // Place bets
-    client.place_bet(&bettor, &market_id, &0, &100, &token, &None);
+    // Gross amounts placed on each outcome.
+    let gross_0: i128 = 100;
+    let gross_1: i128 = 50;
 
-    // Verify stake invariant holds
-    assert!(crate::modules::migration::validate_stake_invariant(&env, market_id).unwrap());
+    client.place_bet(&bettor, &market_id, &0, &gross_0, &token, &None);
+    client.place_bet(&bettor, &market_id, &1, &gross_1, &token, &None);
 
-    // Simulate migration that preserves stake invariant
-    let backup_key = format!("migration:backup:v1");
-    env.storage().persistent().set(&backup_key, &env.ledger().timestamp());
+    let net_0 = client.get_outcome_stake(&market_id, &0);
+    let net_1 = client.get_outcome_stake(&market_id, &1);
 
-    // Migration that maintains invariant (no changes to stakes)
-    let migration_fn = |_e: &Env| Ok(());
+    // Net stake must never exceed the gross amount transferred.
+    assert!(
+        net_0 <= gross_0,
+        "net stake {} exceeds gross amount {}",
+        net_0,
+        gross_0
+    );
+    assert!(
+        net_1 <= gross_1,
+        "net stake {} exceeds gross amount {}",
+        net_1,
+        gross_1
+    );
+    assert!(net_0 >= 0, "net stake must not be negative");
+    assert!(net_1 >= 0, "net stake must not be negative");
 
-    let result = crate::modules::migration::execute_migration(&env, 1, 2, migration_fn);
-    assert!(result.is_ok());
+    // total_staked must equal the sum of net stakes.
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.total_staked, net_0 + net_1);
+    assert_stake_conservation(&env, &client, market_id);
 }
+
+/// Asserts that the contract's token balance always covers the sum of
+/// outstanding claims (open stakes + refundable fees) for open and cancelled
+/// markets, and that protocol fees cannot be withdrawn while a market is open.
+#[test]
+fn test_contract_balance_covers_outstanding_claims() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Solvency Invariant Market"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &

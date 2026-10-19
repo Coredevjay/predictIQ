@@ -67,6 +67,11 @@ pub fn place_bet(
         return Err(ErrorCode::InvalidAmount);
     }
 
+    // Issue #1681: enforce the configurable minimum bet floor so dust bets are rejected.
+    if amount < get_minimum_bet_amount(e) {
+        return Err(ErrorCode::InvalidAmount);
+    }
+
     // Reject self-referral
     if let Some(ref r) = referrer {
         if r == &bettor {
@@ -214,6 +219,34 @@ pub fn place_bet(
     // Topics: [BetPlaced, market_id, bettor]
     crate::modules::events::emit_bet_placed(e, market_id, bettor, outcome, amount);
 
+    Ok(())
+}
+
+/// Default minimum bet amount in stroops (1,000,000 stroops = 0.1 token with 7 decimals).
+pub const DEFAULT_MINIMUM_BET_AMOUNT: i128 = 1_000_000;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MinBetKey {
+    MinimumBetAmount,
+}
+
+/// Returns the configured minimum bet amount, falling back to the default.
+pub fn get_minimum_bet_amount(e: &Env) -> i128 {
+    e.storage()
+        .instance()
+        .get(&MinBetKey::MinimumBetAmount)
+        .unwrap_or(DEFAULT_MINIMUM_BET_AMOUNT)
+}
+
+/// Sets the minimum bet amount. Rejects non-positive values.
+pub fn set_minimum_bet_amount(e: &Env, amount: i128) -> Result<(), ErrorCode> {
+    if amount <= 0 {
+        return Err(ErrorCode::InvalidAmount);
+    }
+    e.storage()
+        .instance()
+        .set(&MinBetKey::MinimumBetAmount, &amount);
     Ok(())
 }
 
