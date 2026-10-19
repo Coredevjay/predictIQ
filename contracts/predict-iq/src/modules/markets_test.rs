@@ -302,6 +302,49 @@ fn test_set_creation_deposit() {
 }
 
 #[test]
+fn test_set_creation_deposit_rejects_negative() {
+    let (_env, client, _admin) = setup();
+
+    let result = client.try_set_creation_deposit(&-1);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
+
+    // The stored value must be unchanged after a rejected update.
+    assert_eq!(client.get_creation_deposit(), 0);
+}
+
+#[test]
+fn test_set_creation_deposit_accepts_zero() {
+    let (_env, client, _admin) = setup();
+
+    client.set_creation_deposit(&10_000_000);
+    client.set_creation_deposit(&0);
+
+    assert_eq!(client.get_creation_deposit(), 0);
+}
+
+#[test]
+fn test_set_creation_fee_rejects_negative() {
+    let (_env, client, _admin) = setup();
+
+    let result = client.try_set_creation_fee(&-1);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
+
+    // The stored value must be unchanged after a rejected update.
+    assert_eq!(client.get_creation_fee(), 0);
+}
+
+#[test]
+fn test_set_creation_fee_accepts_valid_amount() {
+    let (_env, client, _admin) = setup();
+
+    client.set_creation_fee(&5_000_000);
+    assert_eq!(client.get_creation_fee(), 5_000_000);
+
+    client.set_creation_fee(&0);
+    assert_eq!(client.get_creation_fee(), 0);
+}
+
+#[test]
 fn test_market_tiers() {
     let (env, client, admin) = setup();
 

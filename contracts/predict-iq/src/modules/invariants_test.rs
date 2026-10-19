@@ -768,6 +768,164 @@ fn test_stake_conservation_multiple_outcome_refunds() {
 }
 
 // =============================================================================
+// FEE CONSERVATION INVARIANTS
+// =============================================================================
+
+/// Asserts that for every bet placed, the stored net stake never exceeds the
+/// gross amount transferred, and that `total_staked` equals the sum of the
+/// per-outcome net stakes.
+#[test]
+fn test_fee_invariant_net_amount_never_exceeds_gross() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Fee Invariant Market"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    // Gross amounts placed on each outcome.
+    let gross_0: i128 = 100;
+    let gross_1: i128 = 50;
+
+    client.place_bet(&bettor, &market_id, &0, &gross_0, &token, &None);
+    client.place_bet(&bettor, &market_id, &1, &gross_1, &token, &None);
+
+    let net_0 = client.get_outcome_stake(&market_id, &0);
+    let net_1 = client.get_outcome_stake(&market_id, &1);
+
+    // Net stake must never exceed the gross amount transferred.
+    assert!(
+        net_0 <= gross_0,
+        "net stake {} exceeds gross amount {}",
+        net_0,
+        gross_0
+    );
+    assert!(
+        net_1 <= gross_1,
+        "net stake {} exceeds gross amount {}",
+        net_1,
+        gross_1
+    );
+    assert!(net_0 >= 0, "net stake must not be negative");
+    assert!(net_1 >= 0, "net stake must not be negative");
+
+    // total_staked must equal the sum of net stakes.
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.total_staked, net_0 + net_1);
+    assert_stake_conservation(&env, &client, market_id);
+}
+
+/// Asserts that the contract's token balance always covers the sum of
+/// outstanding claims (open stakes + refundable fees) for open and cancelled
+/// markets, and that protocol fees cannot be withdrawn while a market is open.
+#[test]
+fn test_contract_balance_covers_outstanding_claims() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Solvency Invariant Market"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    let gross: i128 = 100;
+    client.place_bet(&bettor, &market_id, &0, &gross, &token, &None);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Active);
+
+    // Outstanding claims for an open market: every bettor can be refunded
+    // `net + fee_paid`, which is exactly the gross amount transferred.
+    let outstanding_claims = gross;
+    let contract_balance = client.get_token_balance(&token);
+    assert!(
+        contract_balance >= outstanding_claims,
+        "contract balance {} < outstanding claims {}",
+        contract_balance,
+        outstanding_claims
+    );
+
+    // Protocol fees must not be withdrawable while the market is open.
+    let fee_result = client.try_withdraw_protocol_fees(&admin, &token);
+    assert!(
+        fee_result.is_err(),
+        "protocol fees must not be withdrawable before the market is resolved"
+    );
+
+    // After cancellation the same funds must still cover refunds.
+    client.cancel_market_admin(&market_id);
+    let contract_balance = client.get_token_balance(&token);
+    assert!(
+        contract_balance >= outstanding_claims,
+        "contract balance {} < refundable claims {} after cancellation",
+        contract_balance,
+        outstanding_claims
+    );
+
+    client.withdraw_refund(&bettor, &market_id, &0, &token);
+    let contract_balance = client.get_token_balance(&token);
+    assert!(
+        contract_balance >= 0,
+        "contract balance must never go negative"
+    );
+}
+
+// =============================================================================
 // MIGRATION INTEGRITY TESTS
 // =============================================================================
 

@@ -98,6 +98,90 @@ fn test_place_bet_negative_amount() {
     assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
 }
 
+// =============================================================================
+// Issue #1681: Minimum bet amount enforcement
+// =============================================================================
+
+/// A bet below the configured minimum must be rejected with InvalidAmount.
+#[test]
+fn test_place_bet_below_minimum_rejected() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().set_timestamp(500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+
+    // Default minimum is 1_000_000 stroops; 999_999 is dust and must be rejected.
+    let result = client.try_place_bet(&user, &market_id, &0, &999_999, &token, &None);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
+}
+
+/// A bet exactly at the configured minimum must be accepted.
+#[test]
+fn test_place_bet_at_minimum_succeeds() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().set_timestamp(500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+
+    let min = client.get_minimum_bet_amount();
+    let result = client.try_place_bet(&user, &market_id, &0, &min, &token, &None);
+    assert!(result.is_ok());
+}
+
+/// A bet above the configured minimum must be accepted.
+#[test]
+fn test_place_bet_above_minimum_succeeds() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().set_timestamp(500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+
+    let min = client.get_minimum_bet_amount();
+    let result = client.try_place_bet(&user, &market_id, &0, &(min + 1), &token, &None);
+    assert!(result.is_ok());
+}
+
+/// The admin can raise the minimum and the new floor is enforced.
+#[test]
+fn test_set_minimum_bet_amount_enforced() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().set_timestamp(500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+
+    client.set_minimum_bet_amount(&5_000);
+
+    // Below the new minimum is rejected.
+    let result = client.try_place_bet(&user, &market_id, &0, &4_999, &token, &None);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
+
+    // At the new minimum succeeds.
+    let result = client.try_place_bet(&user, &market_id, &0, &5_000, &token, &None);
+    assert!(result.is_ok());
+}
+
+/// The setter must reject a zero minimum.
+#[test]
+fn test_set_minimum_bet_amount_rejects_zero() {
+    let (_env, client, _admin, _user, _token) = setup_test_with_token();
+
+    let result = client.try_set_minimum_bet_amount(&0);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
+}
+
+/// The setter must reject a negative minimum.
+#[test]
+fn test_set_minimum_bet_amount_rejects_negative() {
+    let (_env, client, _admin, _user, _token) = setup_test_with_token();
+
+    let result = client.try_set_minimum_bet_amount(&-1);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidAmount)));
+}
+
 #[test]
 fn test_place_bet_invalid_outcome() {
     let (env, client, _admin, user, token) = setup_test_with_token();

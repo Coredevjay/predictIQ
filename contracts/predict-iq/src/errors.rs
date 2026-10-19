@@ -201,6 +201,9 @@ pub enum ErrorCode {
     /// accept additional voters.
     TooManyDisputeVoters = 164,
 
+    /// The bet amount is below the configured minimum bet amount.
+    MinimumBetNotMet = 165,
+
     /// The provided base fee is outside the allowed range (0 to 10_000 bps).
-    InvalidBaseFee = 165,
+    InvalidBaseFee = 166,
 }

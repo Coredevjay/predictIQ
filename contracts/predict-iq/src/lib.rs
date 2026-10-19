@@ -31,7 +31,7 @@ impl PredictIQ {
 
         admin.require_auth();
         admin::set_admin(&e, admin);
-        e.storage().persistent().set(&ConfigKey::BaseFee, &base_fee);
+        crate::modules::fees::set_base_fee(&e, base_fee)?;
         e.storage().persistent().set(
             &ConfigKey::CircuitBreakerState,
             &CircuitBreakerState::Closed,
@@ -209,6 +209,17 @@ impl PredictIQ {
 
     pub fn get_base_fee(e: Env) -> i128 {
         crate::modules::fees::get_base_fee(&e)
+    }
+
+    /// Query the minimum bet amount (in stroops).
+    pub fn get_minimum_bet_amount(e: Env) -> i128 {
+        crate::modules::bets::get_minimum_bet_amount(&e)
+    }
+
+    /// Admin: set the minimum bet amount. Must be positive.
+    pub fn set_minimum_bet_amount(e: Env, amount: i128) -> Result<(), ErrorCode> {
+        crate::modules::admin::require_admin(&e)?;
+        crate::modules::bets::set_minimum_bet_amount(&e, amount)
     }
 
     pub fn get_revenue(e: Env, token: Address) -> i128 {
