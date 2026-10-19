@@ -90,6 +90,17 @@ pub struct LockedTokens {
     pub unlock_time: u64,
 }
 
+// Issue #1697: refundable bond posted by the address that files a dispute.
+// The bond is returned if the dispute succeeds (the disputed outcome wins) and
+// slashed to the treasury if the dispute fails.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeBond {
+    pub disputer: Address,
+    pub amount: i128,
+    pub filed_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OracleConfig {
@@ -134,6 +145,7 @@ pub enum ConfigKey {
     CircuitBreakerThreshold,
     PendingAdmin,
     PendingEmergencyPause,
+    DisputeBond,
 }
 
 #[contracttype]
@@ -202,3 +214,6 @@ pub const BET_TTL_HIGH_THRESHOLD: u32 = 1_555_200; // ~180 days (13000000 second
 // Governance TTL constants (same values, governance-specific aliases)
 pub const GOV_TTL_LOW_THRESHOLD: u32 = TTL_LOW_THRESHOLD;
 pub const GOV_TTL_HIGH_THRESHOLD: u32 = TTL_HIGH_THRESHOLD;
+
+// Issue #1697: default refundable dispute bond (in token base units).
+pub const DEFAULT_DISPUTE_BOND: i128 = 10_000_000; // 1 token at 7 decimals

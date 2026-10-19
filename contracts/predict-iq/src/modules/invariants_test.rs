@@ -768,6 +768,150 @@ fn test_stake_conservation_multiple_outcome_refunds() {
 }
 
 // =============================================================================
+// ZERO-STAKE WINNING OUTCOME INVARIANTS
+// =============================================================================
+
+/// Invariant: a market in `Resolved` status must have a non-zero stake on its
+/// winning outcome. Resolving to an outcome with zero stake would leave the
+/// whole pool permanently locked (no winnings, no refund path).
+fn assert_resolved_has_winning_stake(env: &Env, client: &PredictIQClient, market_id: u64) {
+    let market = client.get_market(&market_id).unwrap();
+    if market.status == MarketStatus::Resolved {
+        let winning_stake = client.get_outcome_stake(&market_id, &market.winning_outcome);
+        assert!(
+            winning_stake > 0,
+            "Invariant violated: resolved market {} has zero stake on winning outcome {}",
+            market_id,
+            market.winning_outcome
+        );
+    }
+}
+
+#[test]
+fn test_resolve_to_zero_stake_outcome_rejected_or_cancelled() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Zero Stake Winning Outcome"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    // Only outcome 0 receives stake; outcome 1 has zero stake.
+    client.place_bet(&bettor, &market_id, &0, &100, &token, &None);
+    assert_eq!(client.get_outcome_stake(&market_id, &1), 0);
+
+    // Attempt to resolve to the zero-stake outcome.
+    let result = client.try_resolve_market(&market_id, &1);
+
+    match result {
+        Err(_) => {
+            // Rejection path: market must remain unresolved and funds claimable
+            // via the normal resolution flow.
+            let market = client.get_market(&market_id).unwrap();
+            assert_ne!(
+                market.status,
+                MarketStatus::Resolved,
+                "Market must not be resolved to a zero-stake outcome"
+            );
+            assert_resolved_has_winning_stake(&env, &client, market_id);
+        }
+        Ok(_) => {
+            // Auto-cancel path: market must be Cancelled with refunds available.
+            let market = client.get_market(&market_id).unwrap();
+            assert_eq!(
+                market.status,
+                MarketStatus::Cancelled,
+                "Resolving to a zero-stake outcome must cancel the market"
+            );
+
+            // Refund must be withdrawable for the staked outcome.
+            client.withdraw_refund(&bettor, &market_id, &0, &token);
+            assert_eq!(client.get_outcome_stake(&market_id, &0), 0);
+            let market = client.get_market(&market_id).unwrap();
+            assert_eq!(market.total_staked, 0);
+        }
+    }
+}
+
+#[test]
+fn test_resolved_market_always_has_winning_stake() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Resolved Winning Stake Invariant"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    client.place_bet(&bettor, &market_id, &0, &100, &token, &None);
+    client.place_bet(&bettor, &market_id, &1, &50, &token, &None);
+
+    // Resolve to a staked outcome: invariant must hold.
+    client.resolve_market(&market_id, &0);
+    assert_resolved_has_winning_stake(&env, &client, market_id);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Resolved);
+    assert_eq!(market.winning_outcome, 0);
+    assert!(client.get_outcome_stake(&market_id, &0) > 0);
+}
+
+// =============================================================================
 // MIGRATION INTEGRITY TESTS
 // =============================================================================
 

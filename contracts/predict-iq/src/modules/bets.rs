@@ -201,6 +201,20 @@ pub fn remove_bet_referrer(e: &Env, market_id: u64, bettor: &Address, outcome: u
     e.storage().persistent().remove(&key);
 }
 
+/// Issue #1698: guard against a `Resolved` market whose winning outcome has no
+/// stake. Such a state can only arise from legacy data (new resolutions reject
+/// zero-stake winners), but if it does occur every `claim_winnings` call would
+/// return `NoWinnings` and the pool would be permanently locked. Callers use
+/// this helper to detect the state and route to the refund path instead.
+pub fn is_zero_stake_winner(e: &Env, market_id: u64) -> bool {
+    match markets::get_market(e, market_id) {
+        Some(market) if market.status == MarketStatus::Resolved => {
+            markets::get_outcome_stake(&market, market.winning_outcome) == 0
+        }
+        _ => false,
+    }
+}
+
 fn internal_claim_amount(
     e: &Env,
     market_id: u64,
