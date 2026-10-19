@@ -5,6 +5,22 @@ use crate::modules::markets;
 use crate::types::{ConfigKey, LockedTokens, MarketStatus, Vote, CANCEL_OUTCOME_INDEX};
 use soroban_sdk::{contracttype, token, Address, Env, IntoVal, Symbol, Val, Vec};
 
+/// Issue #1693: Length of the community voting window, in seconds (72 hours).
+/// Votes are only accepted while `dispute_timestamp <= now < dispute_timestamp + VOTING_PERIOD_SECONDS`.
+pub const VOTING_PERIOD_SECONDS: u64 = 72 * 60 * 60;
+
+/// Issue #1696: Maximum number of distinct voters per disputed market.
+/// Bounds the size of the `DisputeVoters` registry so that `prune_market_voting_state`
+/// (and each vote) cannot grow without limit.
+pub const MAX_DISPUTE_VOTERS: u32 = 500;
+
+/// Issue #1696: Number of voters processed per `prune_market_voting_state` call.
+/// Pruning can be resumed across multiple calls so gas stays bounded.
+pub const PRUNE_BATCH_SIZE: u32 = 50;
+
+/// Issue #1695: Upper bound on governance token decimals accepted for normalization.
+pub const MAX_TOKEN_DECIMALS: u32 = 38;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -15,6 +31,8 @@ pub enum DataKey {
     LockedBalance(u64, Address), // market_id, voter -> amount
     /// Registered voters for a disputed market — drives O(n) deep prune (Issue #84).
     DisputeVoters(u64), // market_id -> Vec<Address>
+    /// Issue #1696: Cursor into the DisputeVoters registry for batched pruning.
+    PruneCursor(u64), // market_id -> u32 (next index to prune)
 }
 
 pub fn cast_vote(
@@ -30,6 +48,20 @@ pub fn cast_vote(
 
     if market.status != MarketStatus::Disputed {
         return Err(ErrorCode::MarketNotDisputed);
+    }
+
+    // Issue #1693: Enforce the voting window. Votes are only valid while
+    // dispute_timestamp <= now < dispute_timestamp + VOTING_PERIOD_SECONDS.
+    let dispute_timestamp = market
+        .dispute_timestamp
+        .ok_or(ErrorCode::MarketNotDisputed)?;
+    let now = e.ledger().timestamp();
+    if now < dispute_timestamp {
+        return Err(ErrorCode::VotingNotStarted);
+    }
+    let voting_deadline = dispute_timestamp.saturating_add(VOTING_PERIOD_SECONDS);
+    if now >= voting_deadline {
+        return Err(ErrorCode::VotingEnded);
     }
 
     if outcome != CANCEL_OUTCOME_INDEX && outcome >= market.options.len() {
@@ -83,19 +115,30 @@ pub fn cast_vote(
             // Issue #37: Fallback — lock tokens and track per-user balance
             let token_client = token::Client::new(e, &gov_token);
             let current_balance = token_client.balance(&voter);
-            if current_balance < weight {
-                return Err(ErrorCode::InsufficientVotingWeight);
-            }
 
-            e.current_contract_address().require_auth();
-            token_client.transfer(&voter, &e.current_contract_address(), &weight);
-
-            // Track per-user locked amount so multiple users don't collide
+            // Issue #1694: On revision, reuse the existing lock. Only the delta
+            // between the new and old weight is transferred (or refunded).
             let lock_key = DataKey::LockedBalance(market_id, voter.clone());
             let existing: i128 = e.storage().persistent().get(&lock_key).unwrap_or(0);
-            e.storage()
-                .persistent()
-                .set(&lock_key, &(existing + weight));
+            let old_weight = old_vote.as_ref().map(|v| v.weight).unwrap_or(0);
+
+            // The new locked amount equals the requested weight; the delta is
+            // what must move in/out of the contract.
+            let delta = weight - existing;
+            if delta > 0 {
+                if current_balance < delta {
+                    return Err(ErrorCode::InsufficientVotingWeight);
+                }
+                e.current_contract_address().require_auth();
+                token_client.transfer(&voter, &e.current_contract_address(), &delta);
+            } else if delta < 0 {
+                e.current_contract_address().require_auth();
+                token_client.transfer(&e.current_contract_address(), &voter, &(-delta));
+            }
+
+            // Keep LockedBalance and LockedTokens.amount in sync with the
+            // current locked amount (never accumulate across revisions).
+            e.storage().persistent().set(&lock_key, &weight);
 
             let locked = LockedTokens {
                 voter: voter.clone(),
@@ -107,6 +150,7 @@ pub fn cast_vote(
                 .persistent()
                 .set(&DataKey::LockedTokens(market_id, voter.clone()), &locked);
 
+            let _ = old_weight;
             weight
         }
     };
@@ -115,18 +159,9 @@ pub fn cast_vote(
         return Err(ErrorCode::InsufficientVotingWeight);
     }
 
-    // Normalize to 18 decimal places so tokens with different precisions are comparable.
-    let token_decimals = get_token_decimals(e, &gov_token);
-    const NORMALIZED_DECIMALS: u32 = 18;
-    let normalized_weight = if token_decimals < NORMALIZED_DECIMALS {
-        let scale = 10i128.pow(NORMALIZED_DECIMALS - token_decimals);
-        actual_weight.saturating_mul(scale)
-    } else if token_decimals > NORMALIZED_DECIMALS {
-        let scale = 10i128.pow(token_decimals - NORMALIZED_DECIMALS);
-        actual_weight / scale
-    } else {
-        actual_weight
-    };
+    // Issue #1695: Normalize to 18 decimal places with bounded, checked math.
+    let token_decimals = get_token_decimals(e, &gov_token)?;
+    let normalized_weight = normalize_weight(actual_weight, token_decimals)?;
 
     if normalized_weight == 0 {
         return Err(ErrorCode::InsufficientVotingWeight);
@@ -148,6 +183,10 @@ pub fn cast_vote(
             .persistent()
             .get(&reg_key)
             .unwrap_or(Vec::new(e));
+        // Issue #1696: Bound the registry so prune gas cannot grow unbounded.
+        if voters.len() >= MAX_DISPUTE_VOTERS {
+            return Err(ErrorCode::TooManyOutcomes);
+        }
         voters.push_back(voter.clone());
         e.storage().persistent().set(&reg_key, &voters);
     }
@@ -176,12 +215,49 @@ fn try_get_balance_at(
     }
 }
 
-/// Fetch the decimal precision of a token contract (defaults to 7 for Stellar native tokens).
-fn get_token_decimals(e: &Env, token: &Address) -> u32 {
+/// Fetch the decimal precision of a token contract.
+///
+/// Issue #1695: Fail loudly instead of silently defaulting when the call fails,
+/// and reject absurd precision values that would overflow normalization.
+fn get_token_decimals(e: &Env, token: &Address) -> Result<u32, ErrorCode> {
     let args: Vec<Val> = soroban_sdk::vec![e];
-    match e.try_invoke_contract::<u32, ErrorCode>(token, &Symbol::new(e, "decimals"), args) {
+    let decimals = match e.try_invoke_contract::<u32, ErrorCode>(
+        token,
+        &Symbol::new(e, "decimals"),
+        args,
+    ) {
         Ok(Ok(d)) => d,
-        _ => 7, // Stellar native token default
+        _ => return Err(ErrorCode::OracleFailure),
+    };
+    if decimals > MAX_TOKEN_DECIMALS {
+        return Err(ErrorCode::InvalidAmount);
+    }
+    Ok(decimals)
+}
+
+/// Issue #1695: Normalize `weight` to 18 decimals using checked arithmetic.
+/// Returns `ArithmeticOverflow` if the scaling factor or the result overflows.
+fn normalize_weight(weight: i128, token_decimals: u32) -> Result<i128, ErrorCode> {
+    const NORMALIZED_DECIMALS: u32 = 18;
+    if token_decimals > MAX_TOKEN_DECIMALS {
+        return Err(ErrorCode::InvalidAmount);
+    }
+    if token_decimals < NORMALIZED_DECIMALS {
+        let exp = NORMALIZED_DECIMALS - token_decimals;
+        let scale = 10i128
+            .checked_pow(exp)
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
+        weight
+            .checked_mul(scale)
+            .ok_or(ErrorCode::ArithmeticOverflow)
+    } else if token_decimals > NORMALIZED_DECIMALS {
+        let exp = token_decimals - NORMALIZED_DECIMALS;
+        let scale = 10i128
+            .checked_pow(exp)
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
+        Ok(weight / scale)
+    } else {
+        Ok(weight)
     }
 }
 
@@ -246,10 +322,20 @@ pub fn get_tally(e: &Env, market_id: u64, outcome: u32) -> i128 {
 
 /// Clears vote tallies, per-voter vote/lock ledgers, and the dispute voter registry.
 /// Safe to call when no voting occurred (only removes keys that exist).
+///
+/// Issue #1696: Voters are processed in bounded batches of `PRUNE_BATCH_SIZE`.
+/// If the registry is larger than one batch, the cursor is persisted and the
+/// caller must invoke this again to continue; tallies and the registry itself
+/// are only cleared once all voters have been processed.
 pub fn prune_market_voting_state(e: &Env, market_id: u64, num_outcomes: u32) {
     let reg_key = DataKey::DisputeVoters(market_id);
+    let cursor_key = DataKey::PruneCursor(market_id);
+    let mut cursor: u32 = e.storage().persistent().get(&cursor_key).unwrap_or(0);
+
     if let Some(voters) = e.storage().persistent().get::<_, Vec<Address>>(&reg_key) {
-        for i in 0..voters.len() {
+        let end = core::cmp::min(cursor.saturating_add(PRUNE_BATCH_SIZE), voters.len());
+        let mut i = cursor;
+        while i < end {
             let v = voters.get(i).unwrap();
             e.storage()
                 .persistent()
@@ -260,9 +346,19 @@ pub fn prune_market_voting_state(e: &Env, market_id: u64, num_outcomes: u32) {
             e.storage()
                 .persistent()
                 .remove(&DataKey::LockedBalance(market_id, v.clone()));
+            i += 1;
+        }
+        cursor = end;
+
+        if cursor < voters.len() {
+            // More voters remain — persist progress and stop this batch.
+            e.storage().persistent().set(&cursor_key, &cursor);
+            return;
         }
     }
+
     e.storage().persistent().remove(&reg_key);
+    e.storage().persistent().remove(&cursor_key);
 
     for o in 0..num_outcomes {
         e.storage()
@@ -394,19 +490,13 @@ mod prune_tests {
 #[cfg(test)]
 mod decimal_normalization_tests {
     /// Unit tests for the decimal normalization logic (no contract env needed).
+    use super::{normalize_weight, MAX_TOKEN_DECIMALS};
+    use crate::errors::ErrorCode;
 
     const NORMALIZED_DECIMALS: u32 = 18;
 
     fn normalize(balance: i128, token_decimals: u32) -> i128 {
-        if token_decimals < NORMALIZED_DECIMALS {
-            let scale = 10i128.pow(NORMALIZED_DECIMALS - token_decimals);
-            balance.saturating_mul(scale)
-        } else if token_decimals > NORMALIZED_DECIMALS {
-            let scale = 10i128.pow(token_decimals - NORMALIZED_DECIMALS);
-            balance / scale
-        } else {
-            balance
-        }
+        normalize_weight(balance, token_decimals).unwrap()
     }
 
     #[test]
@@ -438,6 +528,28 @@ mod decimal_normalization_tests {
         let one_7dec = normalize(10_000_000, 7); // 1 token at 7 decimals
         let one_18dec = normalize(1_000_000_000_000_000_000, 18); // 1 token at 18 decimals
         assert_eq!(one_7dec, one_18dec);
+    }
+
+    /// Issue #1695: decimals above the bound are rejected, not panicked on.
+    #[test]
+    fn decimals_above_bound_rejected() {
+        assert_eq!(
+            normalize_weight(1, MAX_TOKEN_DECIMALS + 1),
+            Err(ErrorCode::InvalidAmount)
+        );
+        assert_eq!(
+            normalize_weight(1, 57),
+            Err(ErrorCode::InvalidAmount)
+        );
+    }
+
+    /// Issue #1695: scaling that would overflow returns ArithmeticOverflow.
+    #[test]
+    fn overflow_returns_error() {
+        // 38 decimals scaled up to 18 would need 10^20 — fine; but a huge
+        // weight times a large scale overflows i128.
+        let result = normalize_weight(i128::MAX, 0);
+        assert_eq!(result, Err(ErrorCode::ArithmeticOverflow));
     }
 }
 
@@ -577,5 +689,329 @@ mod unlock_tokens_terminal_state_tests {
 
         let result = env.as_contract(&contract_id, || unlock_tokens(&env, voter, market_id));
         assert_eq!(result, Err(ErrorCode::MarketNotResolved));
+    }
+}
+
+/// Issue #1693: Voting window boundaries.
+#[cfg(test)]
+mod voting_window_tests {
+    use super::{cast_vote, VOTING_PERIOD_SECONDS};
+    use crate::errors::ErrorCode;
+    use crate::modules::markets;
+    use crate::types::{ConfigKey, MarketStatus, MarketTier, OracleConfig};
+    use crate::{PredictIQ, PredictIQClient};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger as _},
+        token, Address, Env, String, Vec,
+    };
+
+    fn setup() -> (Env, PredictIQClient<'static>, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictIQ, ());
+        let client = PredictIQClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &0);
+        (env, client, admin, contract_id)
+    }
+
+    fn setup_gov_token(env: &Env, contract_id: &Address) -> Address {
+        let token_admin = Address::generate(env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin);
+        let token_address = token_id.address();
+        env.as_contract(contract_id, || {
+            env.storage()
+                .instance()
+                .set(&ConfigKey::GovernanceToken, &token_address);
+        });
+        token_address
+    }
+
+    fn create_disputed_market(
+        env: &Env,
+        client: &PredictIQClient,
+        admin: &Address,
+        contract_id: &Address,
+        dispute_timestamp: u64,
+    ) -> u64 {
+        let options = Vec::from_array(
+            env,
+            [String::from_str(env, "Yes"), String::from_str(env, "No")],
+        );
+        let native_token = Address::generate(env);
+        let market_id = client.create_market(
+            admin,
+            &String::from_str(env, "Window Test"),
+            &options,
+            &1000,
+            &2000,
+            &OracleConfig {
+                oracle_address: Address::generate(env),
+                feed_id: String::from_str(env, "feed"),
+                min_responses: Some(1),
+                max_staleness_seconds: 3600,
+                max_confidence_bps: 200,
+                strike_price: None,
+            },
+            &MarketTier::Basic,
+            &native_token,
+            &0,
+            &0,
+        );
+        env.as_contract(contract_id, || {
+            let mut market = markets::get_market(env, market_id).unwrap();
+            market.status = MarketStatus::Disputed;
+            market.pending_resolution_timestamp = Some(dispute_timestamp);
+            market.dispute_timestamp = Some(dispute_timestamp);
+            market.dispute_snapshot_ledger = Some(env.ledger().sequence());
+            markets::update_market(env, market);
+        });
+        market_id
+    }
+
+    fn vote_at(
+        env: &Env,
+        contract_id: &Address,
+        voter: &Address,
+        market_id: u64,
+        timestamp: u64,
+    ) -> Result<(), ErrorCode> {
+        env.ledger().with_mut(|li| li.timestamp = timestamp);
+        env.as_contract(contract_id, || {
+            cast_vote(env, voter.clone(), market_id, 0, 100)
+        })
+    }
+
+    #[test]
+    fn vote_before_start_rejected() {
+        let (env, client, admin, contract_id) = setup();
+        let gov_token = setup_gov_token(&env, &contract_id);
+        let dispute_ts = 10_000u64;
+        let market_id = create_disputed_market(&env, &client, &admin, &contract_id, dispute_ts);
+        let voter = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &gov_token).mint(&voter, &1000);
+
+        let result = vote_at(&env, &contract_id, &voter, market_id, dispute_ts - 1);
+        assert_eq!(result, Err(ErrorCode::VotingNotStarted));
+    }
+
+    #[test]
+    fn vote_at_deadline_minus_one_accepted() {
+        let (env, client, admin, contract_id) = setup();
+        let gov_token = setup_gov_token(&env, &contract_id);
+        let dispute_ts = 10_000u64;
+        let market_id = create_disputed_market(&env, &client, &admin, &contract_id, dispute_ts);
+        let voter = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &gov_token).mint(&voter, &1000);
+
+        let deadline = dispute_ts + VOTING_PERIOD_SECONDS;
+        let result = vote_at(&env, &contract_id, &voter, market_id, deadline - 1);
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn vote_at_deadline_rejected() {
+        let (env, client, admin, contract_id) = setup();
+        let gov_token = setup_gov_token(&env, &contract_id);
+        let dispute_ts = 10_000u64;
+        let market_id = create_disputed_market(&env, &client, &admin, &contract_id, dispute_ts);
+        let voter = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &gov_token).mint(&voter, &1000);
+
+        let deadline = dispute_ts + VOTING_PERIOD_SECONDS;
+        let result = vote_at(&env, &contract_id, &voter, market_id, deadline);
+        assert_eq!(result, Err(ErrorCode::VotingEnded));
+    }
+
+    #[test]
+    fn vote_after_deadline_rejected() {
+        let (env, client, admin, contract_id) = setup();
+        let gov_token = setup_gov_token(&env, &contract_id);
+        let dispute_ts = 10_000u64;
+        let market_id = create_disputed_market(&env, &client, &admin, &contract_id, dispute_ts);
+        let voter = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &gov_token).mint(&voter, &1000);
+
+        let deadline = dispute_ts + VOTING_PERIOD_SECONDS;
+        let result = vote_at(&env, &contract_id, &voter, market_id, deadline + 1);
+        assert_eq!(result, Err(ErrorCode::VotingEnded));
+    }
+}
+
+/// Issue #1694: Vote revision must not accumulate locked tokens.
+#[cfg(test)]
+mod vote_revision_lock_tests {
+    use super::{cast_vote, DataKey};
+    use crate::modules::markets;
+    use crate::types::{ConfigKey, LockedTokens, MarketStatus, MarketTier, OracleConfig};
+    use crate::{PredictIQ, PredictIQClient};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger as _},
+        token, Address, Env, String, Vec,
+    };
+
+    fn setup() -> (Env, PredictIQClient<'static>, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(PredictIQ, ());
+        let client = PredictIQClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin, &0);
+        (env, client, admin, contract_id)
+    }
+
+    fn setup_gov_token(env: &Env, contract_id: &Address) -> Address {
+        let token_admin = Address::generate(env);
+        let token_id = env.register_stellar_asset_contract_v2(token_admin);
+        let token_address = token_id.address();
+        env.as_contract(contract_id, || {
+            env.storage()
+                .instance()
+                .set(&ConfigKey::GovernanceToken, &token_address);
+        });
+        token_address
+    }
+
+    fn create_disputed_market(
+        env: &Env,
+        client: &PredictIQClient,
+        admin: &Address,
+        contract_id: &Address,
+    ) -> u64 {
+        let options = Vec::from_array(
+            env,
+            [String::from_str(env, "Yes"), String::from_str(env, "No")],
+        );
+        let native_token = Address::generate(env);
+        let market_id = client.create_market(
+            admin,
+            &String::from_str(env, "Revision Test"),
+            &options,
+            &1000,
+            &2000,
+            &OracleConfig {
+                oracle_address: Address::generate(env),
+                feed_id: String::from_str(env, "feed"),
+                min_responses: Some(1),
+                max_staleness_seconds: 3600,
+                max_confidence_bps: 200,
+                strike_price: None,
+            },
+            &MarketTier::Basic,
+            &native_token,
+            &0,
+            &0,
+        );
+        env.as_contract(contract_id, || {
+            let mut market = markets::get_market(env, market_id).unwrap();
+            market.status = MarketStatus::Disputed;
+            market.pending_resolution_timestamp = Some(1001);
+            market.dispute_timestamp = Some(1001);
+            market.dispute_snapshot_ledger = Some(env.ledger().sequence());
+            markets::update_market(env, market);
+        });
+        market_id
+    }
+
+    #[test]
+    fn repeated_revisions_keep_lock_in_sync() {
+        let (env, client, admin, contract_id) = setup();
+        let gov_token = setup_gov_token(&env, &contract_id);
+        let market_id = create_disputed_market(&env, &client, &admin, &contract_id);
+        let voter = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &gov_token).mint(&voter, &1000);
+        let token_client = token::Client::new(&env, &gov_token);
+
+        env.ledger().with_mut(|li| li.timestamp = 1001);
+
+        // First vote locks 300.
+        env.as_contract(&contract_id, || {
+            cast_vote(&env, voter.clone(), market_id, 0, 300).unwrap();
+        });
+        assert_eq!(token_client.balance(&voter), 700);
+
+        // Revise up to 500 — only the 200 delta is transferred.
+        env.as_contract(&contract_id, || {
+            cast_vote(&env, voter.clone(), market_id, 1, 500).unwrap();
+        });
+        assert_eq!(token_client.balance(&voter), 500);
+
+        // Revise down to 200 — 300 is refunded.
+        env.as_contract(&contract_id, || {
+            cast_vote(&env, voter.clone(), market_id, 0, 200).unwrap();
+        });
+        assert_eq!(token_client.balance(&voter), 800);
+
+        env.as_contract(&contract_id, || {
+            let locked_balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LockedBalance(market_id, voter.clone()))
+                .unwrap();
+            let locked: LockedTokens = env
+                .storage()
+                .persistent()
+                .get(&DataKey::LockedTokens(market_id, voter.clone()))
+                .unwrap();
+            assert_eq!(locked_balance, 200);
+            assert_eq!(locked.amount, locked_balance);
+        });
+    }
+}
+
+/// Issue #1696: Registry cap and batched pruning.
+#[cfg(test)]
+mod registry_cap_tests {
+    use super::{prune_market_voting_state, DataKey, MAX_DISPUTE_VOTERS, PRUNE_BATCH_SIZE};
+    use crate::types::Vote;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
+
+    #[test]
+    fn prune_processes_voters_in_batches() {
+        let e = Env::default();
+        let market_id = 7u64;
+        let total = PRUNE_BATCH_SIZE + 5;
+        let mut reg = soroban_sdk::Vec::new(&e);
+        for _ in 0..total {
+            let v = Address::generate(&e);
+            e.storage().persistent().set(
+                &DataKey::Vote(market_id, v.clone()),
+                &Vote {
+                    market_id,
+                    voter: v.clone(),
+                    outcome: 0,
+                    weight: 1,
+                },
+            );
+            reg.push_back(v);
+        }
+        e.storage()
+            .persistent()
+            .set(&DataKey::DisputeVoters(market_id), &reg);
+
+        // First call prunes one batch and leaves the registry in place.
+        prune_market_voting_state(&e, market_id, 2);
+        assert!(e
+            .storage()
+            .persistent()
+            .has(&DataKey::DisputeVoters(market_id)));
+
+        // Second call finishes the remainder and clears the registry.
+        prune_market_voting_state(&e, market_id, 2);
+        assert!(!e
+            .storage()
+            .persistent()
+            .has(&DataKey::DisputeVoters(market_id)));
+        assert!(!e
+            .storage()
+            .persistent()
+            .has(&DataKey::PruneCursor(market_id)));
+    }
+
+    #[test]
+    fn registry_cap_is_bounded() {
+        // Sanity check that the cap is a sane bound.
+        assert!(MAX_DISPUTE_VOTERS > 0);
+        assert!(PRUNE_BATCH_SIZE <= MAX_DISPUTE_VOTERS);
     }
 }

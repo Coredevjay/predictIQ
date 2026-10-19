@@ -81,6 +81,9 @@ pub struct Vote {
     pub weight: i128,
 }
 
+// Issue #1694: `amount` must always equal the voter's `LockedBalance` for the
+// market. Vote revisions reuse the existing lock (transferring only the delta)
+// and update this record in place instead of overwriting it with a fresh lock.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LockedTokens {
@@ -105,6 +108,15 @@ pub struct OracleConfig {
 pub const MAX_PUSH_PAYOUT_WINNERS: u32 = 50; // Threshold for switching to pull mode
 pub const MAX_OUTCOMES_PER_MARKET: u32 = 100; // Limit to prevent excessive iteration
 pub const CANCEL_OUTCOME_INDEX: u32 = u32::MAX; // Sentinel outcome for community cancel votes
+
+// Dispute voting constants
+// Issue #1693: votes are only accepted while the dispute voting window is open.
+pub const VOTING_PERIOD_SECONDS: u64 = 72 * 60 * 60; // 72 hours
+// Issue #1696: cap the per-market voter registry so prune_market_voting_state
+// can iterate it in bounded batches.
+pub const MAX_DISPUTE_VOTERS: u32 = 500;
+// Number of voters processed per prune_market_voting_state invocation.
+pub const VOTER_PRUNE_BATCH_SIZE: u32 = 50;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

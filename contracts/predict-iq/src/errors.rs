@@ -192,4 +192,12 @@ pub enum ErrorCode {
 
     /// The operation would reduce the guardian set below the required minimum.
     BelowMinimumGuardianCount = 162,
+
+    /// The governance token reports a decimals value that is invalid or unsupported
+    /// (e.g. above the maximum allowed for safe weight normalisation).
+    InvalidTokenDecimals = 163,
+
+    /// The per-market dispute voter registry has reached its maximum size and cannot
+    /// accept additional voters.
+    TooManyDisputeVoters = 164,
 }

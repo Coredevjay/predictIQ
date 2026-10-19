@@ -827,6 +827,146 @@ fn test_migration_rolls_back_on_validation_failure() {
     assert!(env.storage().persistent().has(&crate::types::ConfigKey::Admin));
 }
 
+// =============================================================================
+// DISPUTE VOTERS REGISTRY BOUNDS (#1696)
+// =============================================================================
+
+#[test]
+fn test_dispute_voters_registry_is_bounded() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Bounded Voters Market"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    // Fill the registry up to the per-market cap with distinct first-time voters.
+    let cap = crate::modules::voting::MAX_DISPUTE_VOTERS_PER_MARKET;
+    for _ in 0..cap {
+        let voter = Address::generate(&env);
+        client.vote_on_dispute(&voter, &market_id, &true);
+    }
+
+    // The registry must never exceed the cap.
+    assert!(
+        crate::modules::voting::get_dispute_voter_count(&env, market_id) <= cap,
+        "DisputeVoters registry exceeded per-market cap"
+    );
+
+    // Further first-time voters must be rejected rather than growing the registry.
+    let extra_voter = Address::generate(&env);
+    let result = client.try_vote_on_dispute(&extra_voter, &market_id, &true);
+    assert!(
+        result.is_err(),
+        "First-time voter beyond the cap should be rejected"
+    );
+    assert!(
+        crate::modules::voting::get_dispute_voter_count(&env, market_id) <= cap,
+        "Rejected vote must not grow the registry"
+    );
+}
+
+#[test]
+fn test_prune_market_voting_state_is_batched() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Batched Prune Market"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    // Populate a number of voters larger than a single prune batch.
+    let batch = crate::modules::voting::PRUNE_VOTERS_BATCH_SIZE;
+    let voter_count = batch * 2 + 1;
+    for _ in 0..voter_count {
+        let voter = Address::generate(&env);
+        client.vote_on_dispute(&voter, &market_id, &true);
+    }
+
+    let initial = crate::modules::voting::get_dispute_voter_count(&env, market_id);
+    assert!(initial > 0);
+
+    // Each prune call must process at most one batch, keeping gas bounded.
+    let mut remaining = initial;
+    let mut calls = 0u32;
+    while remaining > 0 {
+        let before = remaining;
+        client.prune_market_voting_state(&market_id);
+        remaining = crate::modules::voting::get_dispute_voter_count(&env, market_id);
+
+        let processed = before - remaining;
+        assert!(
+            processed <= batch,
+            "prune_market_voting_state processed {} voters, exceeding batch size {}",
+            processed,
+            batch
+        );
+        assert!(remaining < before, "prune must make progress");
+
+        calls += 1;
+        assert!(calls <= voter_count + 1, "prune failed to terminate");
+    }
+
+    assert_eq!(
+        crate::modules::voting::get_dispute_voter_count(&env, market_id),
+        0
+    );
+}
+
 #[test]
 fn test_stake_invariant_maintained_after_valid_migration() {
     let env = soroban_sdk::Env::default();

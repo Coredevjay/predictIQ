@@ -984,3 +984,128 @@ fn test_cast_vote_invalid_outcome() {
     let result = client.try_cast_vote(&voter, &market_id, &99, &1000);
     assert_eq!(result, Err(Ok(ErrorCode::InvalidOutcome)));
 }
+
+// ── Voting-window enforcement tests (#1693) ──────────────────────────────────
+// cast_vote must reject votes before the dispute timestamp (VotingNotStarted)
+// and at/after dispute_timestamp + VOTING_PERIOD_SECONDS (VotingEnded).
+
+/// Helper: create a disputed market and return (market_id, dispute_timestamp).
+fn setup_disputed_market(
+    e: &Env,
+    client: &PredictIQClient,
+    token_client: &token::StellarAssetClient,
+) -> (u64, u64) {
+    let resolution_deadline = 2000u64;
+    let market_id = create_multi_outcome_market(client, e, 3, resolution_deadline);
+
+    client.set_oracle_result(&market_id, &0, &0);
+    e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
+    client.attempt_oracle_resolution(&market_id);
+
+    let dispute_timestamp = resolution_deadline + 10_000;
+    let disputer = Address::generate(e);
+    e.ledger().with_mut(|li| li.timestamp = dispute_timestamp);
+    client.file_dispute(&disputer, &market_id);
+
+    // Fund a voter so vote-weight checks never mask the window check.
+    let voter = Address::generate(e);
+    token_client.mint(&voter, &10_000);
+
+    (market_id, dispute_timestamp)
+}
+
+/// A vote cast one second before the window closes must succeed.
+#[test]
+fn test_cast_vote_one_second_before_voting_deadline_succeeds() {
+    let (e, _admin, _contract_id, client) = setup_test_env();
+
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&e, &token_address);
+    client.set_governance_token(&token_address);
+
+    let (market_id, dispute_timestamp) = setup_disputed_market(&e, &client, &token_client);
+
+    let voter = Address::generate(&e);
+    token_client.mint(&voter, &1000);
+
+    e.ledger().with_mut(|li| {
+        li.timestamp = dispute_timestamp + VOTING_PERIOD_SECONDS - 1;
+    });
+
+    let result = client.try_cast_vote(&voter, &market_id, &0, &1000);
+    assert!(result.is_ok(), "vote just before deadline should succeed: {:?}", result);
+}
+
+/// A vote cast exactly at the voting deadline must be rejected with VotingEnded.
+#[test]
+fn test_cast_vote_at_voting_deadline_fails_with_voting_ended() {
+    let (e, _admin, _contract_id, client) = setup_test_env();
+
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&e, &token_address);
+    client.set_governance_token(&token_address);
+
+    let (market_id, dispute_timestamp) = setup_disputed_market(&e, &client, &token_client);
+
+    let voter = Address::generate(&e);
+    token_client.mint(&voter, &1000);
+
+    e.ledger().with_mut(|li| {
+        li.timestamp = dispute_timestamp + VOTING_PERIOD_SECONDS;
+    });
+
+    let result = client.try_cast_vote(&voter, &market_id, &0, &1000);
+    assert_eq!(result, Err(Ok(ErrorCode::VotingEnded)));
+}
+
+/// A vote cast one second after the voting deadline must be rejected with VotingEnded.
+#[test]
+fn test_cast_vote_after_voting_deadline_fails_with_voting_ended() {
+    let (e, _admin, _contract_id, client) = setup_test_env();
+
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&e, &token_address);
+    client.set_governance_token(&token_address);
+
+    let (market_id, dispute_timestamp) = setup_disputed_market(&e, &client, &token_client);
+
+    let voter = Address::generate(&e);
+    token_client.mint(&voter, &1000);
+
+    e.ledger().with_mut(|li| {
+        li.timestamp = dispute_timestamp + VOTING_PERIOD_SECONDS + 1;
+    });
+
+    let result = client.try_cast_vote(&voter, &market_id, &0, &1000);
+    assert_eq!(result, Err(Ok(ErrorCode::VotingEnded)));
+}
+
+/// A vote cast before the dispute timestamp must be rejected with VotingNotStarted.
+#[test]
+fn test_cast_vote_before_dispute_timestamp_fails_with_voting_not_started() {
+    let (e, _admin, _contract_id, client) = setup_test_env();
+
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&e, &token_address);
+    client.set_governance_token(&token_address);
+
+    let (market_id, dispute_timestamp) = setup_disputed_market(&e, &client, &token_client);
+
+    let voter = Address::generate(&e);
+    token_client.mint(&voter, &1000);
+
+    e.ledger().with_mut(|li| {
+        li.timestamp = dispute_timestamp - 1;
+    });
+
+    let result = client.try_cast_vote(&voter, &market_id, &0, &1000);
+    assert_eq!(result, Err(Ok(ErrorCode::VotingNotStarted)));
+}
