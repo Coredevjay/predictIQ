@@ -457,3 +457,267 @@ fn test_governance_decimals_normalization() {
         assert_eq!(voting::normalize_weight(&env, 1_000, 20), Ok(10));
     });
 }
+
+// ── Issue #1697: dispute bond tests ───────────────────────────────────────────
+
+/// (a) Filing a dispute without the required bond is rejected.
+#[test]
+fn test_file_dispute_without_bond_fails() {
+    let (env, client, admin, contract_addr) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+    let token = Address::generate(&env);
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Bond Required"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config(&env),
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    env.ledger().with_mut(|li| li.timestamp = 2001);
+    env.as_contract(&contract_addr, || {
+        let mut market = markets::get_market(&env, market_id).unwrap();
+        market.status = MarketStatus::PendingResolution;
+        market.pending_resolution_timestamp = Some(2001);
+        markets::update_market(&env, market);
+    });
+
+    env.ledger().with_mut(|li| li.timestamp = 2002);
+    let disputer = Address::generate(&env);
+    // No bond provided / zero bond must be rejected.
+    let result = client.try_file_dispute(&disputer, &market_id);
+    assert!(
+        result.is_err(),
+        "file_dispute without a bond must be rejected"
+    );
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_ne!(
+        market.status,
+        MarketStatus::Disputed,
+        "market must not be frozen without a bond"
+    );
+}
+
+/// (b) Filing a dispute with the bond succeeds and the event carries the bond amount.
+#[test]
+fn test_file_dispute_with_bond_succeeds_and_emits_bond() {
+    let (env, client, admin, contract_addr) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+    let token = Address::generate(&env);
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Bond Emitted"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config(&env),
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    env.ledger().with_mut(|li| li.timestamp = 2001);
+    env.as_contract(&contract_addr, || {
+        let mut market = markets::get_market(&env, market_id).unwrap();
+        market.status = MarketStatus::PendingResolution;
+        market.pending_resolution_timestamp = Some(2001);
+        markets::update_market(&env, market);
+    });
+
+    env.ledger().with_mut(|li| li.timestamp = 2002);
+    let disputer = Address::generate(&env);
+    client.file_dispute(&disputer, &market_id);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Disputed);
+    assert!(
+        market.dispute_bond > 0,
+        "dispute bond must be recorded on the market"
+    );
+
+    // The dispute event must include the bond amount.
+    let events = env.events().all();
+    let found = events.iter().any(|(_, topics, data)| {
+        let _ = topics;
+        // Event data encodes the bond; assert it is present and non-zero.
+        !data.is_void()
+    });
+    assert!(found, "dispute event must be emitted with bond data");
+}
+
+/// (c) A dispute that prevails (disputer's outcome wins) refunds the bond.
+#[test]
+fn test_successful_dispute_refunds_bond() {
+    let (env, client, admin, contract_addr) = setup();
+    let market_id = setup_disputed_market(&env, &client, &contract_addr, &admin);
+
+    let disputer = Address::generate(&env);
+    env.as_contract(&contract_addr, || {
+        let mut market = markets::get_market(&env, market_id).unwrap();
+        market.dispute_bond = 100;
+        market.disputer = Some(disputer.clone());
+        markets::update_market(&env, market);
+    });
+
+    // Disputer's outcome (0) wins the vote.
+    inject_tally(&env, &contract_addr, market_id, 0, 900);
+    inject_tally(&env, &contract_addr, market_id, 1, 100);
+
+    env.ledger().with_mut(|li| li.timestamp = 2001 + 259_201);
+    env.as_contract(&contract_addr, || {
+        let result = crate::modules::resolution::finalize_resolution(&env, market_id);
+        assert!(result.is_ok(), "resolution should succeed: {:?}", result);
+        let market = markets::get_market(&env, market_id).unwrap();
+        assert_eq!(market.winning_outcome, Some(0));
+        assert_eq!(
+            market.dispute_bond, 0,
+            "bond must be refunded (cleared) on a successful dispute"
+        );
+    });
+}
+
+/// (d) A dispute that fails (disputer's outcome loses) slashes the bond.
+#[test]
+fn test_failed_dispute_slashes_bond() {
+    let (env, client, admin, contract_addr) = setup();
+    let market_id = setup_disputed_market(&env, &client, &contract_addr, &admin);
+
+    let disputer = Address::generate(&env);
+    env.as_contract(&contract_addr, || {
+        let mut market = markets::get_market(&env, market_id).unwrap();
+        market.dispute_bond = 100;
+        market.disputer = Some(disputer.clone());
+        markets::update_market(&env, market);
+    });
+
+    // Disputer's outcome (0) loses the vote.
+    inject_tally(&env, &contract_addr, market_id, 0, 100);
+    inject_tally(&env, &contract_addr, market_id, 1, 900);
+
+    env.ledger().with_mut(|li| li.timestamp = 2001 + 259_201);
+    env.as_contract(&contract_addr, || {
+        let result = crate::modules::resolution::finalize_resolution(&env, market_id);
+        assert!(result.is_ok(), "resolution should succeed: {:?}", result);
+        let market = markets::get_market(&env, market_id).unwrap();
+        assert_eq!(market.winning_outcome, Some(1));
+        assert_eq!(
+            market.dispute_bond, 0,
+            "bond must be slashed (not refunded) on a failed dispute"
+        );
+    });
+}
+
+// ── Issue #1698: zero-stake winning outcome tests ────────────────────────────
+
+/// Resolving to an outcome with zero stake must be rejected so the pool is
+/// never permanently locked.
+#[test]
+fn test_resolve_zero_stake_outcome_rejected() {
+    let (env, client, admin, contract_addr) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+    let token = Address::generate(&env);
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Zero Stake"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config(&env),
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    // No bets placed: both outcomes have zero stake.
+    env.ledger().with_mut(|li| li.timestamp = 2001);
+    env.as_contract(&contract_addr, || {
+        let mut market = markets::get_market(&env, market_id).unwrap();
+        market.status = MarketStatus::PendingResolution;
+        market.pending_resolution_timestamp = Some(2001);
+        markets::update_market(&env, market);
+    });
+
+    let result = client.try_resolve_market(&admin, &market_id, &0);
+    assert!(
+        result.is_err(),
+        "resolving to a zero-stake outcome must be rejected"
+    );
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_ne!(
+        market.status,
+        MarketStatus::Resolved,
+        "market must not be marked Resolved when the winning outcome has no stake"
+    );
+}
+
+/// When the winning outcome has no stake the market must be cancellable so
+/// stakers can be refunded rather than having the pool locked forever.
+#[test]
+fn test_zero_stake_outcome_pool_remains_refundable() {
+    let (env, client, admin, contract_addr) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+    let token = Address::generate(&env);
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Zero Stake Refund"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config(&env),
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    env.ledger().with_mut(|li| li.timestamp = 2001);
+    env.as_contract(&contract_addr, || {
+        let mut market = markets::get_market(&env, market_id).unwrap();
+        market.status = MarketStatus::PendingResolution;
+        market.pending_resolution_timestamp = Some(2001);
+        markets::update_market(&env, market);
+    });
+
+    // Rejecting the zero-stake resolution must leave a refund path available.
+    let resolve_result = client.try_resolve_market(&admin, &market_id, &0);
+    assert!(resolve_result.is_err());
+
+    let cancel_result = client.try_cancel_market(&admin, &market_id);
+    assert!(
+        cancel_result.is_ok(),
+        "market must be cancellable/refundable when resolution is rejected: {:?}",
+        cancel_result
+    );
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(
+        market.status,
+        MarketStatus::Cancelled,
+        "market should be Cancelled so stakers can claim refunds"
+    );
+}

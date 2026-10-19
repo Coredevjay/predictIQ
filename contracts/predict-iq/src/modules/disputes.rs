@@ -1,5 +1,5 @@
 use crate::errors::ErrorCode;
-use crate::modules::markets;
+use crate::modules::{markets, sac};
 use crate::types::{ConfigKey, MarketStatus};
 use soroban_sdk::{contracttype, Address, Env};
 
@@ -28,6 +28,21 @@ pub fn file_dispute(e: &Env, disciplinarian: Address, market_id: u64) -> Result<
         return Err(ErrorCode::DisputeWindowClosed);
     }
 
+    // Issue #1697: filing a dispute must cost something so that finalisation
+    // cannot be frozen for free. The bond is refundable if the dispute
+    // succeeds and slashed (sent to the market pool) if it fails.
+    let bond_amount: i128 = e
+        .storage()
+        .persistent()
+        .get(&ConfigKey::DisputeBond)
+        .unwrap_or(crate::types::DEFAULT_DISPUTE_BOND);
+    if bond_amount <= 0 {
+        return Err(ErrorCode::InvalidAmount);
+    }
+    let bond_token = markets::get_market_bond_token(e, market_id);
+    sac::safe_transfer(e, &bond_token, &disciplinarian, &e.current_contract_address(), bond_amount)?;
+    markets::set_dispute_bond(e, market_id, &disciplinarian, bond_amount);
+
     market.status = MarketStatus::Disputed;
     market.dispute_timestamp = Some(e.ledger().timestamp());
     // Extend resolution deadline by the full dispute window duration
@@ -36,7 +51,13 @@ pub fn file_dispute(e: &Env, disciplinarian: Address, market_id: u64) -> Result<
 
     markets::update_market(e, market);
 
-    crate::modules::events::emit_dispute_filed(e, market_id, disciplinarian, new_deadline);
+    crate::modules::events::emit_dispute_filed(
+        e,
+        market_id,
+        disciplinarian,
+        new_deadline,
+        bond_amount,
+    );
 
     Ok(())
 }
@@ -59,6 +80,14 @@ pub fn resolve_market(e: &Env, market_id: u64, winning_outcome: u32) -> Result<(
         return Err(ErrorCode::InvalidOutcome);
     }
 
+    // Issue #1698: resolving to an outcome with zero stake would leave the
+    // whole pool permanently locked (claim_winnings returns NoWinnings to
+    // everyone and Resolved is terminal). Reject such resolutions.
+    let winning_stake = market.outcome_stakes.get(winning_outcome).unwrap_or(0);
+    if winning_stake <= 0 {
+        return Err(ErrorCode::ZeroWinningStake);
+    }
+
     // payout_mode is intentionally NOT mutated here — it is fixed at creation
     // time and must remain stable throughout PendingResolution and Disputed
     // phases so that gas and distribution path calculations are consistent.
@@ -68,14 +97,14 @@ pub fn resolve_market(e: &Env, market_id: u64, winning_outcome: u32) -> Result<(
     market.resolved_at = Some(e.ledger().timestamp());
 
     // Issue #35: Calculate actual total payout for the event
-    let winning_stake = market.outcome_stakes.get(winning_outcome).unwrap_or(0);
-    let total_payout = if winning_stake > 0 {
-        market.total_staked
-    } else {
-        0
-    };
+    let total_payout = market.total_staked;
 
     markets::update_market(e, market);
+
+    // Issue #1697: settle the dispute bond now that the market is finalised.
+    // If the disputed outcome matches the final outcome the dispute succeeded
+    // and the bond is refunded; otherwise it is slashed into the market pool.
+    settle_dispute_bond(e, market_id, winning_outcome);
 
     let admin = crate::modules::admin::get_admin(e).unwrap_or(e.current_contract_address());
     crate::modules::events::emit_resolution_finalized(
@@ -87,6 +116,28 @@ pub fn resolve_market(e: &Env, market_id: u64, winning_outcome: u32) -> Result<(
     );
 
     Ok(())
+}
+
+/// Issue #1697: refund or slash the dispute bond recorded when the dispute was
+/// filed. A successful dispute (the final outcome differs from the outcome
+/// that was pending when the dispute was filed) refunds the bond to the
+/// disputer; a failed dispute transfers it into the market pool.
+fn settle_dispute_bond(e: &Env, market_id: u64, winning_outcome: u32) {
+    let record = match markets::get_dispute_bond(e, market_id) {
+        Some(r) => r,
+        None => return,
+    };
+    markets::clear_dispute_bond(e, market_id);
+
+    let bond_token = markets::get_market_bond_token(e, market_id);
+    let contract = e.current_contract_address();
+    if record.disputed_outcome != winning_outcome {
+        // Dispute succeeded: refund the bond to the disputer.
+        let _ = sac::safe_transfer(e, &bond_token, &contract, &record.disputer, record.amount);
+    } else {
+        // Dispute failed: slash the bond into the market pool.
+        let _ = sac::safe_transfer(e, &bond_token, &contract, &markets::get_market_pool(e, market_id), record.amount);
+    }
 }
 
 pub fn set_max_push_payout_winners(e: &Env, threshold: u32) -> Result<(), ErrorCode> {

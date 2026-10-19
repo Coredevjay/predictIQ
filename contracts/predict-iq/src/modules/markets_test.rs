@@ -811,6 +811,85 @@ fn test_prune_rejects_cancelled_market() {
     assert_eq!(result, Err(Ok(ErrorCode::MarketNotResolved)));
 }
 
+// ---------------------------------------------------------------------------
+// Issue #1689: creator deposit release on cancelled markets
+//
+// A market creator who never placed a bet must still be able to reclaim the
+// creation deposit once the market is Cancelled.  release_creation_deposit must
+// reject every non-Cancelled status.
+// ---------------------------------------------------------------------------
+
+/// Cancelled market → creator (who never bet) can release the creation deposit.
+#[test]
+fn test_release_creation_deposit_succeeds_for_cancelled_market() {
+    let (env, client, admin) = setup();
+    env.ledger().set_timestamp(100);
+    let market_id = create_market_at(&env, &client, &admin, 2000, 3000);
+
+    client.cancel_market_admin(&market_id);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Cancelled);
+
+    // Creator never placed a bet; the deposit release must still succeed.
+    let result = client.try_release_creation_deposit(&admin, &market_id);
+    assert!(result.is_ok());
+}
+
+/// Active market → release_creation_deposit must return MarketNotActive.
+#[test]
+fn test_release_creation_deposit_rejects_active_market() {
+    let (env, client, admin) = setup();
+    env.ledger().set_timestamp(100);
+    let market_id = create_market_at(&env, &client, &admin, 2000, 3000);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Active);
+
+    let result = client.try_release_creation_deposit(&admin, &market_id);
+    assert_eq!(result, Err(Ok(ErrorCode::MarketNotActive)));
+}
+
+/// PendingResolution market → release_creation_deposit must return MarketNotActive.
+#[test]
+fn test_release_creation_deposit_rejects_pending_resolution_market() {
+    let (env, client, admin) = setup();
+    env.ledger().set_timestamp(100);
+    let market_id = create_market_at(&env, &client, &admin, 2000, 3000);
+
+    client.set_oracle_result(&market_id, &0, &0);
+    env.ledger().set_timestamp(3000);
+    client.attempt_oracle_resolution(&market_id);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::PendingResolution);
+
+    let result = client.try_release_creation_deposit(&admin, &market_id);
+    assert_eq!(result, Err(Ok(ErrorCode::MarketNotActive)));
+}
+
+/// Disputed market → release_creation_deposit must return MarketNotActive.
+#[test]
+fn test_release_creation_deposit_rejects_disputed_market() {
+    let (env, client, admin) = setup();
+    env.ledger().set_timestamp(100);
+    let market_id = create_market_at(&env, &client, &admin, 2000, 3000);
+
+    client.set_oracle_result(&market_id, &0, &0);
+    env.ledger().set_timestamp(3000);
+    client.attempt_oracle_resolution(&market_id);
+
+    let disputer = Address::generate(&env);
+    env.ledger().set_timestamp(3000 + 1000);
+    client.file_dispute(&disputer, &market_id);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Disputed);
+
+    let result = client.try_release_creation_deposit(&admin, &market_id);
+    assert_eq!(result, Err(Ok(ErrorCode::MarketNotActive)));
+}
+
 /// Resolved market past grace period → prune must succeed (positive control).
 #[test]
 fn test_prune_accepts_resolved_market_past_grace_period() {

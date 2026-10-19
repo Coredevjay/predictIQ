@@ -14,8 +14,14 @@ use soroban_sdk::{symbol_short, Address, Env};
 /// This standardization ensures external indexers can perfectly reconstruct
 /// market states by following a consistent event schema.
 ///
-/// EVENT SCHEMA VERSION: 1
-/// Last Updated: 2026-05-29
+/// EVENT SCHEMA VERSION: 2
+/// Last Updated: 2026-06-01
+///
+/// Schema history:
+/// - v1: initial standardized schema
+/// - v2: `disp_file` payload gains `bond` (i128); `disp_res` payload gains
+///   `bond_refunded` (bool) and `bond_amount` (i128) so indexers can track
+///   dispute bond refunds/slashes (issue #1697).
 ///
 /// Indexer Integration Guide:
 /// 1. Subscribe to contract events using market_id as primary filter
@@ -26,7 +32,7 @@ use soroban_sdk::{symbol_short, Address, Env};
 /// 6. Check the version field before decoding the payload to handle schema changes
 
 /// Current event schema version. Increment this when any event structure changes.
-pub const EVENT_VERSION: u32 = 1;
+pub const EVENT_VERSION: u32 = 2;
 
 pub fn emit_market_created(
     e: &Env,
@@ -49,10 +55,24 @@ pub fn emit_bet_placed(e: &Env, market_id: u64, bettor: Address, outcome: u32, a
     );
 }
 
-pub fn emit_dispute_filed(e: &Env, market_id: u64, disciplinarian: Address, new_deadline: u64) {
+/// Emit DisputeFiled event.
+///
+/// Issue #1697: disputes now require a refundable bond. The bond amount is
+/// included in the payload so indexers can surface the cost of filing.
+///
+/// Indexer schema:
+///   topics: [disp_file, market_id, disciplinarian]
+///   data:   (version: u32, new_deadline: u64, bond: i128)
+pub fn emit_dispute_filed(
+    e: &Env,
+    market_id: u64,
+    disciplinarian: Address,
+    new_deadline: u64,
+    bond: i128,
+) {
     e.events().publish(
         (symbol_short!("disp_file"), market_id, disciplinarian),
-        (EVENT_VERSION, new_deadline),
+        (EVENT_VERSION, new_deadline, bond),
     );
 }
 
@@ -136,10 +156,25 @@ pub fn emit_market_finalized(e: &Env, market_id: u64, resolver: Address, winning
     );
 }
 
-pub fn emit_dispute_resolved(e: &Env, market_id: u64, resolver: Address, winning_outcome: u32) {
+/// Emit DisputeResolved event.
+///
+/// Issue #1697: reports the fate of the dispute bond so indexers can track
+/// refunds (successful dispute) versus slashes (failed dispute).
+///
+/// Indexer schema:
+///   topics: [disp_res, market_id, resolver]
+///   data:   (version: u32, winning_outcome: u32, bond_refunded: bool, bond_amount: i128)
+pub fn emit_dispute_resolved(
+    e: &Env,
+    market_id: u64,
+    resolver: Address,
+    winning_outcome: u32,
+    bond_refunded: bool,
+    bond_amount: i128,
+) {
     e.events().publish(
         (symbol_short!("disp_res"), market_id, resolver),
-        (EVENT_VERSION, winning_outcome),
+        (EVENT_VERSION, winning_outcome, bond_refunded, bond_amount),
     );
 }
 

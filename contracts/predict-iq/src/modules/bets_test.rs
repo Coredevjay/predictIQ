@@ -1105,3 +1105,124 @@ fn test_resolve_market_invalid_outcome() {
     let result = client.try_resolve_market(&market_id, &99);
     assert_eq!(result, Err(Ok(ErrorCode::InvalidOutcome)));
 }
+
+// =============================================================================
+// Issue #1689: Creator can reclaim creation deposit on a cancelled market
+// without having placed a bet.
+// =============================================================================
+
+/// A creator who never bet on their own market must still be able to reclaim
+/// the creation deposit once the market is cancelled.
+#[test]
+fn test_creator_reclaims_deposit_on_cancelled_market_without_bet() {
+    let (env, client, _admin, creator, token) = setup_test_with_token();
+
+    env.ledger().with_mut(|li| li.timestamp = 500);
+
+    let market_id = create_simple_market(&client, &env, &creator, &token);
+
+    // Creator never places a bet on the market.
+    assert!(client.get_bet(&market_id, &creator, &0).is_none());
+
+    client.cancel_market_admin(&market_id);
+
+    let token_client = token::Client::new(&env, &token);
+    let balance_before = token_client.balance(&creator);
+
+    // Deposit refund must be reachable even though no bet record exists.
+    let refunded = client.release_creation_deposit(&market_id);
+    assert!(refunded > 0, "creator deposit must be refunded");
+
+    let balance_after = token_client.balance(&creator);
+    assert_eq!(
+        balance_after - balance_before,
+        refunded,
+        "creator balance must increase by the refunded deposit"
+    );
+
+    // A second release must not pay out again.
+    let second = client.try_release_creation_deposit(&market_id);
+    assert!(
+        second.is_err() || second == Ok(Ok(0)),
+        "deposit must not be released twice"
+    );
+}
+
+/// `withdraw_refund` called by the creator (who has no bet) on a cancelled
+/// market must not fail with `MarketNotFound`; the deposit path must run.
+#[test]
+fn test_withdraw_refund_creator_without_bet_on_cancelled_market() {
+    let (env, client, _admin, creator, token) = setup_test_with_token();
+
+    env.ledger().with_mut(|li| li.timestamp = 500);
+
+    let market_id = create_simple_market(&client, &env, &creator, &token);
+    client.cancel_market_admin(&market_id);
+
+    let result = client.try_withdraw_refund(&creator, &market_id, &0, &token);
+    assert_ne!(
+        result,
+        Err(Ok(ErrorCode::MarketNotFound)),
+        "creator without a bet must not get MarketNotFound on a cancelled market"
+    );
+}
+
+// =============================================================================
+// Issue #1690: Token-mismatch and missing-bet paths return accurate errors
+// =============================================================================
+
+/// `place_bet` with a token that is not the market token must return
+/// `InvalidToken`, not `InvalidBetAmount`.
+#[test]
+fn test_place_bet_wrong_token_returns_invalid_token() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().set_timestamp(500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+
+    let wrong_token = Address::generate(&env);
+    let result = client.try_place_bet(&user, &market_id, &0, &1000, &wrong_token, &None);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidToken)));
+}
+
+/// `withdraw_refund` with a token that is not the market token must return
+/// `InvalidToken`, not `InvalidBetAmount`.
+#[test]
+fn test_withdraw_refund_wrong_token_returns_invalid_token() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().set_timestamp(500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+    client.place_bet(&user, &market_id, &0, &1000, &token, &None);
+    client.cancel_market_admin(&market_id);
+
+    let wrong_token = Address::generate(&env);
+    let result = client.try_withdraw_refund(&user, &market_id, &0, &wrong_token);
+    assert_eq!(result, Err(Ok(ErrorCode::InvalidToken)));
+}
+
+/// `withdraw_refund` by a caller who simply has no bet must report
+/// `BetNotFound` (or a zero refund), never `MarketNotFound`.
+#[test]
+fn test_withdraw_refund_no_bet_returns_bet_not_found() {
+    let (env, client, _admin, user, token) = setup_test_with_token();
+
+    env.ledger().with_mut(|li| li.timestamp = 500);
+
+    let market_id = create_simple_market(&client, &env, &user, &token);
+    client.cancel_market_admin(&market_id);
+
+    // `user` is the creator but never placed a bet on outcome 1.
+    let result = client.try_withdraw_refund(&user, &market_id, &1, &token);
+    assert_ne!(
+        result,
+        Err(Ok(ErrorCode::MarketNotFound)),
+        "missing bet must not be reported as MarketNotFound"
+    );
+    assert!(
+        result == Err(Ok(ErrorCode::BetNotFound)) || result == Ok(Ok(0)),
+        "missing bet must yield BetNotFound or a zero refund"
+    );
+}

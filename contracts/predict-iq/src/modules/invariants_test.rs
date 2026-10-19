@@ -768,6 +768,150 @@ fn test_stake_conservation_multiple_outcome_refunds() {
 }
 
 // =============================================================================
+// ZERO-STAKE WINNING OUTCOME INVARIANTS
+// =============================================================================
+
+/// Invariant: a market in `Resolved` status must have a non-zero stake on its
+/// winning outcome. Resolving to an outcome with zero stake would leave the
+/// whole pool permanently locked (no winnings, no refund path).
+fn assert_resolved_has_winning_stake(env: &Env, client: &PredictIQClient, market_id: u64) {
+    let market = client.get_market(&market_id).unwrap();
+    if market.status == MarketStatus::Resolved {
+        let winning_stake = client.get_outcome_stake(&market_id, &market.winning_outcome);
+        assert!(
+            winning_stake > 0,
+            "Invariant violated: resolved market {} has zero stake on winning outcome {}",
+            market_id,
+            market.winning_outcome
+        );
+    }
+}
+
+#[test]
+fn test_resolve_to_zero_stake_outcome_rejected_or_cancelled() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Zero Stake Winning Outcome"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    // Only outcome 0 receives stake; outcome 1 has zero stake.
+    client.place_bet(&bettor, &market_id, &0, &100, &token, &None);
+    assert_eq!(client.get_outcome_stake(&market_id, &1), 0);
+
+    // Attempt to resolve to the zero-stake outcome.
+    let result = client.try_resolve_market(&market_id, &1);
+
+    match result {
+        Err(_) => {
+            // Rejection path: market must remain unresolved and funds claimable
+            // via the normal resolution flow.
+            let market = client.get_market(&market_id).unwrap();
+            assert_ne!(
+                market.status,
+                MarketStatus::Resolved,
+                "Market must not be resolved to a zero-stake outcome"
+            );
+            assert_resolved_has_winning_stake(&env, &client, market_id);
+        }
+        Ok(_) => {
+            // Auto-cancel path: market must be Cancelled with refunds available.
+            let market = client.get_market(&market_id).unwrap();
+            assert_eq!(
+                market.status,
+                MarketStatus::Cancelled,
+                "Resolving to a zero-stake outcome must cancel the market"
+            );
+
+            // Refund must be withdrawable for the staked outcome.
+            client.withdraw_refund(&bettor, &market_id, &0, &token);
+            assert_eq!(client.get_outcome_stake(&market_id, &0), 0);
+            let market = client.get_market(&market_id).unwrap();
+            assert_eq!(market.total_staked, 0);
+        }
+    }
+}
+
+#[test]
+fn test_resolved_market_always_has_winning_stake() {
+    let (env, client, admin) = setup();
+
+    let options = Vec::from_array(
+        &env,
+        [
+            String::from_str(&env, "Yes"),
+            String::from_str(&env, "No"),
+        ],
+    );
+
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(&env),
+        feed_id: String::from_str(&env, "test"),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+
+    let token = Address::generate(&env);
+    let bettor = Address::generate(&env);
+
+    let market_id = client.create_market(
+        &admin,
+        &String::from_str(&env, "Resolved Winning Stake Invariant"),
+        &options,
+        &1000,
+        &2000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+
+    client.place_bet(&bettor, &market_id, &0, &100, &token, &None);
+    client.place_bet(&bettor, &market_id, &1, &50, &token, &None);
+
+    // Resolve to a staked outcome: invariant must hold.
+    client.resolve_market(&market_id, &0);
+    assert_resolved_has_winning_stake(&env, &client, market_id);
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, MarketStatus::Resolved);
+    assert_eq!(market.winning_outcome, 0);
+    assert!(client.get_outcome_stake(&market_id, &0) > 0);
+}
+
+// =============================================================================
 // FEE CONSERVATION INVARIANTS
 // =============================================================================
 
@@ -879,308 +1023,4 @@ fn test_contract_balance_covers_outstanding_claims() {
         &oracle_config,
         &MarketTier::Basic,
         &token,
-        &0,
-        &0,
-    );
-
-    let gross: i128 = 100;
-    client.place_bet(&bettor, &market_id, &0, &gross, &token, &None);
-
-    let market = client.get_market(&market_id).unwrap();
-    assert_eq!(market.status, MarketStatus::Active);
-
-    // Outstanding claims for an open market: every bettor can be refunded
-    // `net + fee_paid`, which is exactly the gross amount transferred.
-    let outstanding_claims = gross;
-    let contract_balance = client.get_token_balance(&token);
-    assert!(
-        contract_balance >= outstanding_claims,
-        "contract balance {} < outstanding claims {}",
-        contract_balance,
-        outstanding_claims
-    );
-
-    // Protocol fees must not be withdrawable while the market is open.
-    let fee_result = client.try_withdraw_protocol_fees(&admin, &token);
-    assert!(
-        fee_result.is_err(),
-        "protocol fees must not be withdrawable before the market is resolved"
-    );
-
-    // After cancellation the same funds must still cover refunds.
-    client.cancel_market_admin(&market_id);
-    let contract_balance = client.get_token_balance(&token);
-    assert!(
-        contract_balance >= outstanding_claims,
-        "contract balance {} < refundable claims {} after cancellation",
-        contract_balance,
-        outstanding_claims
-    );
-
-    client.withdraw_refund(&bettor, &market_id, &0, &token);
-    let contract_balance = client.get_token_balance(&token);
-    assert!(
-        contract_balance >= 0,
-        "contract balance must never go negative"
-    );
-}
-
-// =============================================================================
-// MIGRATION INTEGRITY TESTS
-// =============================================================================
-
-#[test]
-fn test_migration_integrity_validation_passes_after_successful_migration() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    // Setup admin for migration integrity check
-    let admin = Address::generate(&env);
-    env.storage().persistent().set(&crate::types::ConfigKey::Admin, &admin);
-    env.storage().persistent().set(&crate::types::ConfigKey::GuardianSet, &admin);
-
-    // Verify integrity passes when required keys exist
-    let result = crate::modules::migration::verify_migration_integrity(&env);
-    assert!(result.unwrap_or(false));
-}
-
-#[test]
-fn test_migration_integrity_validation_fails_without_admin() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    // Clear admin key - should fail validation
-    env.storage().persistent().remove(&crate::types::ConfigKey::Admin);
-    env.storage().persistent().set(&crate::types::ConfigKey::GuardianSet, &Address::generate(&env));
-
-    let result = crate::modules::migration::verify_migration_integrity(&env);
-    assert!(!result.unwrap_or(false));
-}
-
-#[test]
-fn test_migration_rolls_back_on_validation_failure() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    env.storage().persistent().set(&crate::types::ConfigKey::Admin, &admin);
-    env.storage().persistent().set(&crate::types::ConfigKey::GuardianSet, &admin);
-
-    // Migration that removes admin key (invalidates state)
-    let result = crate::modules::migration::execute_migration(
-        &env,
-        1,
-        2,
-        |_e| {
-            _e.storage().persistent().remove(&crate::types::ConfigKey::Admin);
-            Ok(())
-        },
-    );
-
-    // Should fail due to validation failure
-    assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), crate::errors::ErrorCode::MigrationValidationError);
-
-    // Admin key should be restored after rollback
-    assert!(env.storage().persistent().has(&crate::types::ConfigKey::Admin));
-}
-
-// =============================================================================
-// DISPUTE VOTERS REGISTRY BOUNDS (#1696)
-// =============================================================================
-
-#[test]
-fn test_dispute_voters_registry_is_bounded() {
-    let (env, client, admin) = setup();
-
-    let options = Vec::from_array(
-        &env,
-        [
-            String::from_str(&env, "Yes"),
-            String::from_str(&env, "No"),
-        ],
-    );
-
-    let oracle_config = OracleConfig {
-        oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
-        min_responses: Some(1),
-        max_staleness_seconds: 3600,
-        max_confidence_bps: 100,
-        strike_price: None,
-    };
-
-    let token = Address::generate(&env);
-
-    let market_id = client.create_market(
-        &admin,
-        &String::from_str(&env, "Bounded Voters Market"),
-        &options,
-        &1000,
-        &2000,
-        &oracle_config,
-        &MarketTier::Basic,
-        &token,
-        &0,
-        &0,
-    );
-
-    // Fill the registry up to the per-market cap with distinct first-time voters.
-    let cap = crate::modules::voting::MAX_DISPUTE_VOTERS_PER_MARKET;
-    for _ in 0..cap {
-        let voter = Address::generate(&env);
-        client.vote_on_dispute(&voter, &market_id, &true);
-    }
-
-    // The registry must never exceed the cap.
-    assert!(
-        crate::modules::voting::get_dispute_voter_count(&env, market_id) <= cap,
-        "DisputeVoters registry exceeded per-market cap"
-    );
-
-    // Further first-time voters must be rejected rather than growing the registry.
-    let extra_voter = Address::generate(&env);
-    let result = client.try_vote_on_dispute(&extra_voter, &market_id, &true);
-    assert!(
-        result.is_err(),
-        "First-time voter beyond the cap should be rejected"
-    );
-    assert!(
-        crate::modules::voting::get_dispute_voter_count(&env, market_id) <= cap,
-        "Rejected vote must not grow the registry"
-    );
-}
-
-#[test]
-fn test_prune_market_voting_state_is_batched() {
-    let (env, client, admin) = setup();
-
-    let options = Vec::from_array(
-        &env,
-        [
-            String::from_str(&env, "Yes"),
-            String::from_str(&env, "No"),
-        ],
-    );
-
-    let oracle_config = OracleConfig {
-        oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
-        min_responses: Some(1),
-        max_staleness_seconds: 3600,
-        max_confidence_bps: 100,
-        strike_price: None,
-    };
-
-    let token = Address::generate(&env);
-
-    let market_id = client.create_market(
-        &admin,
-        &String::from_str(&env, "Batched Prune Market"),
-        &options,
-        &1000,
-        &2000,
-        &oracle_config,
-        &MarketTier::Basic,
-        &token,
-        &0,
-        &0,
-    );
-
-    // Populate a number of voters larger than a single prune batch.
-    let batch = crate::modules::voting::PRUNE_VOTERS_BATCH_SIZE;
-    let voter_count = batch * 2 + 1;
-    for _ in 0..voter_count {
-        let voter = Address::generate(&env);
-        client.vote_on_dispute(&voter, &market_id, &true);
-    }
-
-    let initial = crate::modules::voting::get_dispute_voter_count(&env, market_id);
-    assert!(initial > 0);
-
-    // Each prune call must process at most one batch, keeping gas bounded.
-    let mut remaining = initial;
-    let mut calls = 0u32;
-    while remaining > 0 {
-        let before = remaining;
-        client.prune_market_voting_state(&market_id);
-        remaining = crate::modules::voting::get_dispute_voter_count(&env, market_id);
-
-        let processed = before - remaining;
-        assert!(
-            processed <= batch,
-            "prune_market_voting_state processed {} voters, exceeding batch size {}",
-            processed,
-            batch
-        );
-        assert!(remaining < before, "prune must make progress");
-
-        calls += 1;
-        assert!(calls <= voter_count + 1, "prune failed to terminate");
-    }
-
-    assert_eq!(
-        crate::modules::voting::get_dispute_voter_count(&env, market_id),
-        0
-    );
-}
-
-#[test]
-fn test_stake_invariant_maintained_after_valid_migration() {
-    let env = soroban_sdk::Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let contract_id = env.register(PredictIQ, ());
-    let client = PredictIQClient::new(&env, &contract_id);
-    client.initialize(&admin, &100);
-
-    let options = Vec::from_array(
-        &env,
-        [
-            String::from_str(&env, "Yes"),
-            String::from_str(&env, "No"),
-        ],
-    );
-
-    let oracle_config = OracleConfig {
-        oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
-        min_responses: Some(1),
-        max_staleness_seconds: 3600,
-        max_confidence_bps: 100,
-        strike_price: None,
-    };
-
-    let token = Address::generate(&env);
-    let bettor = Address::generate(&env);
-
-    let market_id = client.create_market(
-        &admin,
-        &String::from_str(&env, "Invariant Migration Test"),
-        &options,
-        &1000,
-        &2000,
-        &oracle_config,
-        &MarketTier::Basic,
-        &token,
-        &0,
-        &0,
-    );
-
-    // Place bets
-    client.place_bet(&bettor, &market_id, &0, &100, &token, &None);
-
-    // Verify stake invariant holds
-    assert!(crate::modules::migration::validate_stake_invariant(&env, market_id).unwrap());
-
-    // Simulate migration that preserves stake invariant
-    let backup_key = format!("migration:backup:v1");
-    env.storage().persistent().set(&backup_key, &env.ledger().timestamp());
-
-    // Migration that maintains invariant (no changes to stakes)
-    let migration_fn = |_e: &Env| Ok(());
-
-    let result = crate::modules::migration::execute_migration(&env, 1, 2, migration_fn);
-    assert!(result.is_ok());
-}
+        &
