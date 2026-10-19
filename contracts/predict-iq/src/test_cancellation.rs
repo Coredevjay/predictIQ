@@ -318,3 +318,249 @@ fn test_cancel_vote_threshold_no_overflow() {
         result.is_ok() || result == Err(Ok(crate::errors::ErrorCode::InsufficientVotingWeight))
     );
 }
+
+/// Issue #1692: cancel_market_vote must not cancel while the voting window is
+/// still open, even if the cancel tally is 100% of the (tiny) votes cast so far.
+#[test]
+fn test_cancel_vote_rejected_before_voting_period_ends() {
+    let (env, client, _admin, user1, _user2, token_address) = setup_test();
+
+    let oracle = Address::generate(&env);
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+
+    let market_id = client.create_market(
+        &user1,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &crate::types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 3600,
+            max_confidence_bps: 200,
+            strike_price: None,
+        },
+        &crate::types::MarketTier::Basic,
+        &token_address,
+        &0,
+        &0,
+    );
+
+    client.place_bet(&user1, &market_id, &0, &1000, &token_address, &None);
+    client.resolve_market(&market_id, &0);
+    client.file_dispute(&user1, &market_id);
+
+    // Single early voter with 100% of the tally — would previously cancel instantly.
+    client.cast_vote(&user1, &market_id, &crate::types::CANCEL_OUTCOME_INDEX, &1000);
+
+    let result = client.try_cancel_market_vote(&market_id);
+    assert!(
+        result.is_err(),
+        "cancel_market_vote must not succeed before the voting period closes"
+    );
+
+    // Market must still be Disputed, not Cancelled.
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, crate::types::MarketStatus::Disputed);
+}
+
+/// Issue #1692: a tally below the quorum must not cancel the market even
+/// after the voting window has closed.
+#[test]
+fn test_cancel_vote_rejected_below_quorum() {
+    let (env, client, _admin, user1, _user2, token_address) = setup_test();
+
+    let oracle = Address::generate(&env);
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+
+    let market_id = client.create_market(
+        &user1,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &crate::types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 3600,
+            max_confidence_bps: 200,
+            strike_price: None,
+        },
+        &crate::types::MarketTier::Basic,
+        &token_address,
+        &0,
+        &0,
+    );
+
+    client.place_bet(&user1, &market_id, &0, &1000, &token_address, &None);
+    client.resolve_market(&market_id, &0);
+    client.file_dispute(&user1, &market_id);
+
+    // Tiny cancel tally relative to total voting weight.
+    client.cast_vote(&user1, &market_id, &crate::types::CANCEL_OUTCOME_INDEX, &1);
+
+    // Advance past the 72h voting window.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 72 * 60 * 60 + 1);
+
+    let result = client.try_cancel_market_vote(&market_id);
+    assert!(
+        result.is_err(),
+        "cancel_market_vote must not succeed below quorum"
+    );
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, crate::types::MarketStatus::Disputed);
+}
+
+/// Issue #1692: the tally sum must use checked arithmetic and never panic on
+/// overflow when accumulating votes.
+#[test]
+fn test_cancel_vote_tally_sum_no_overflow() {
+    let (env, client, _admin, user1, user2, token_address) = setup_test();
+
+    let oracle = Address::generate(&env);
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+
+    let market_id = client.create_market(
+        &user1,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &crate::types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 3600,
+            max_confidence_bps: 200,
+            strike_price: None,
+        },
+        &crate::types::MarketTier::Basic,
+        &token_address,
+        &0,
+        &0,
+    );
+
+    client.place_bet(&user1, &market_id, &0, &1000, &token_address, &None);
+    client.resolve_market(&market_id, &0);
+    client.file_dispute(&user1, &market_id);
+
+    // Two votes whose sum overflows i128 if accumulated unchecked.
+    let big = i128::MAX - 10;
+    client.cast_vote(&user1, &market_id, &crate::types::CANCEL_OUTCOME_INDEX, &big);
+    client.cast_vote(&user2, &market_id, &crate::types::CANCEL_OUTCOME_INDEX, &big);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + 72 * 60 * 60 + 1);
+
+    // Must not panic; overflow is surfaced as an error instead.
+    let result = client.try_cancel_market_vote(&market_id);
+    assert!(
+        result.is_err(),
+        "overflowing tally sum must return an error, not panic"
+    );
+}
+
+/// Issue #1689: a creator who never placed a bet must still be able to reclaim
+/// the creation deposit once the market is Cancelled.
+#[test]
+fn test_creator_deposit_refund_without_bet() {
+    let (env, client, _admin, user1, _user2, token_address) = setup_test();
+
+    let token_client = token::Client::new(&env, &token_address);
+
+    let oracle = Address::generate(&env);
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+
+    client.set_creation_deposit(&100i128);
+
+    let market_id = client.create_market(
+        &user1,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &crate::types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 3600,
+            max_confidence_bps: 200,
+            strike_price: None,
+        },
+        &crate::types::MarketTier::Basic,
+        &token_address,
+        &0,
+        &0,
+    );
+
+    // Creator never places a bet.
+    client.cancel_market_admin(&market_id);
+
+    let balance_before = token_client.balance(&user1);
+
+    // Deposit refund must be reachable without any bet record.
+    client.release_creation_deposit(&market_id);
+
+    assert_eq!(token_client.balance(&user1), balance_before + 100);
+
+    // Cannot be claimed twice.
+    let second_attempt = client.try_release_creation_deposit(&market_id);
+    assert!(second_attempt.is_err());
+}
+
+/// Issue #1689: release_creation_deposit must still reject markets that are
+/// neither Resolved nor Cancelled.
+#[test]
+fn test_release_creation_deposit_rejects_open_market() {
+    let (env, client, _admin, user1, _user2, token_address) = setup_test();
+
+    let oracle = Address::generate(&env);
+    let options = Vec::from_array(
+        &env,
+        [String::from_str(&env, "Yes"), String::from_str(&env, "No")],
+    );
+
+    client.set_creation_deposit(&100i128);
+
+    let market_id = client.create_market(
+        &user1,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &crate::types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 3600,
+            max_confidence_bps: 200,
+            strike_price: None,
+        },
+        &crate::types::MarketTier::Basic,
+        &token_address,
+        &0,
+        &0,
+    );
+
+    // Market is still Active.
+    let result = client.try_release_creation_deposit(&market_id);
+    assert!(
+        result.is_err(),
+        "release_creation_deposit must reject non-Resolved/non-Cancelled markets"
+    );
+}

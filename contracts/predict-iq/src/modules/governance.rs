@@ -137,7 +137,7 @@ pub fn vote_on_guardian_removal(e: &Env, voter: Address, approve: bool) -> Resul
         .storage()
         .persistent()
         .get::<_, crate::types::PendingGuardianRemoval>(&ConfigKey::PendingGuardianRemoval)
-        .ok_or(ErrorCode::GuardianNotSet)?;
+        .ok_or(ErrorCode::RemovalNotPending)?;
 
     // Issue #1194: a stale proposal that nobody resolved must be re-initiated
     // rather than staying open forever, slowly accumulating "yes" votes.
@@ -149,18 +149,18 @@ pub fn vote_on_guardian_removal(e: &Env, voter: Address, approve: bool) -> Resul
         e.storage()
             .persistent()
             .remove(&ConfigKey::PendingGuardianRemovalPassedAt);
-        return Err(ErrorCode::GuardianNotSet);
+        return Err(ErrorCode::RemovalExpired);
     }
 
     // Check if voter already voted, either way
     for v in pending_removal.votes_for.iter() {
         if v == voter {
-            return Err(ErrorCode::AlreadyVotedOnUpgrade);
+            return Err(ErrorCode::AlreadyVotedOnRemoval);
         }
     }
     for v in pending_removal.votes_against.iter() {
         if v == voter {
-            return Err(ErrorCode::AlreadyVotedOnUpgrade);
+            return Err(ErrorCode::AlreadyVotedOnRemoval);
         }
     }
 

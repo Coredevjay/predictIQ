@@ -463,7 +463,14 @@ pub fn release_creation_deposit(
     // Only the market creator may reclaim their own deposit
     market.creator.require_auth();
 
-    if market.status != MarketStatus::Resolved {
+    // The deposit is reclaimable once the market reaches a terminal state:
+    // either it resolved (creator's job is done) or it was cancelled (the
+    // market never ran, so the creator should not forfeit the deposit).
+    // This is intentionally independent of whether the creator placed a bet.
+    if !matches!(
+        market.status,
+        MarketStatus::Resolved | MarketStatus::Cancelled
+    ) {
         return Err(ErrorCode::MarketNotActive);
     }
 
