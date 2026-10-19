@@ -25,6 +25,17 @@ fn setup_test_env() -> (Env, Address, Address, PredictIQClient<'static>) {
     (e, admin, contract_id, client)
 }
 
+/// Creates a funded disputer address holding enough of the governance token to
+/// cover the dispute bond required by `file_dispute`.
+fn funded_disputer(e: &Env, client: &PredictIQClient, token_address: &Address) -> Address {
+    let token_client = token::StellarAssetClient::new(e, token_address);
+    let disputer = Address::generate(e);
+    token_client.mint(&disputer, &1_000_000);
+    // Ensure the contract knows about the governance token used for bonds.
+    client.set_governance_token(token_address);
+    disputer
+}
+
 fn create_test_market(
     client: &PredictIQClient,
     e: &Env,
@@ -218,6 +229,32 @@ fn test_illegal_dispute_after_window_closed() {
     assert_eq!(result, Err(Ok(ErrorCode::DisputeWindowClosed)));
 }
 
+/// A disputer with no bond funds cannot freeze finalisation for free.
+#[test]
+fn test_illegal_dispute_without_bond_funds() {
+    let (e, _admin, _, client) = setup_test_env();
+    let resolution_deadline = 2000;
+    let market_id = create_test_market(&client, &e, resolution_deadline);
+
+    client.set_oracle_result(&market_id, &0, &0);
+    e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
+    client.attempt_oracle_resolution(&market_id);
+
+    // Unfunded disputer: no governance token balance to post the bond.
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    client.set_governance_token(&token_id.address());
+
+    let disputer = Address::generate(&e);
+    e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
+    let result = client.try_file_dispute(&disputer, &market_id);
+    assert!(result.is_err());
+
+    // Market must remain PendingResolution — no free freeze.
+    let market = client.get_market(&market_id).unwrap();
+    assert_eq!(market.status, types::MarketStatus::PendingResolution);
+}
+
 /// Disputed → finalize before voting period ends is illegal.
 #[test]
 fn test_illegal_finalize_disputed_before_voting_period() {
@@ -229,7 +266,10 @@ fn test_illegal_finalize_disputed_before_voting_period() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -250,7 +290,10 @@ fn test_illegal_double_dispute() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -338,7 +381,10 @@ fn test_illegal_admin_fallback_before_voting_period() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -366,7 +412,7 @@ fn test_illegal_admin_fallback_when_majority_exists() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -396,7 +442,10 @@ fn test_illegal_admin_fallback_invalid_outcome() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -500,7 +549,10 @@ fn test_legal_dispute_at_last_valid_second() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     // One second before the window closes (strictly less than pending_ts + window).
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 259_200 - 1);
     client.file_dispute(&disputer, &market_id);
@@ -578,7 +630,10 @@ fn test_stage3_dispute_filed_within_72h() {
     client.attempt_oracle_resolution(&market_id);
     
     // File dispute within 72h window
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| {
         li.timestamp = resolution_deadline + 10000;
     });
@@ -640,7 +695,7 @@ fn test_stage4_voting_resolution_with_majority() {
     client.attempt_oracle_resolution(&market_id);
     
     // File dispute
-    let disputer = Address::generate(&e);
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| {
         li.timestamp = resolution_deadline + 10000;
     });
@@ -698,7 +753,7 @@ fn test_stage4_no_majority_requires_admin() {
     client.attempt_oracle_resolution(&market_id);
     
     // File dispute
-    let disputer = Address::generate(&e);
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| {
         li.timestamp = resolution_deadline + 10000;
     });
@@ -797,7 +852,10 @@ fn test_legal_admin_fallback_after_deadlock() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -927,7 +985,7 @@ fn test_resolved_at_populated_after_dispute_resolution() {
     client.attempt_oracle_resolution(&market_id);
 
     // File dispute within 72h window
-    let disputer = Address::generate(&e);
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| {
         li.timestamp = resolution_deadline + 10000;
     });
@@ -988,7 +1046,10 @@ fn test_dispute_window_boundary_minus_one_dispute_allowed() {
     let (e, _admin, _, client) = setup_test_env();
     let market_id = setup_pending_market(&client, &e);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = BOUNDARY - 1);
     client.file_dispute(&disputer, &market_id);
 
@@ -1079,7 +1140,10 @@ fn test_disputed_market_uses_dispute_timestamp_not_pending_ts() {
 
     // Dispute filed at T=10_001 (well within the 72h window)
     // → dispute_timestamp = 10_001
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = 10_001);
     client.file_dispute(&disputer, &market_id);
 
@@ -1120,7 +1184,7 @@ fn test_disputed_market_finalizes_after_dispute_timestamp_plus_72h() {
     let market_id = setup_pending_market(&client, &e);
 
     // Dispute filed at T=50_000 → dispute_timestamp = 50_000
-    let disputer = Address::generate(&e);
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = 50_000);
     client.file_dispute(&disputer, &market_id);
 
@@ -1161,7 +1225,10 @@ fn test_disputed_finalization_with_zero_votes_returns_no_majority() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
@@ -1206,11 +1273,71 @@ fn test_cast_vote_invalid_outcome() {
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
     client.attempt_oracle_resolution(&market_id);
 
-    let disputer = Address::generate(&e);
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let disputer = funded_disputer(&e, &client, &token_address);
     e.ledger().with_mut(|li| li.timestamp = resolution_deadline + 1000);
     client.file_dispute(&disputer, &market_id);
 
     let voter = Address::generate(&e);
     let result = client.try_cast_vote(&voter, &market_id, &99, &1);
     assert_eq!(result, Err(Ok(ErrorCode::InvalidOutcome)));
+}
+
+// ── Issue #1698: resolving to a zero-stake outcome must not lock the pool ────
+
+/// Resolving to an outcome with no stake must be rejected (or auto-refund),
+/// never leaving the pool permanently locked.
+#[test]
+fn test_resolve_market_zero_stake_outcome_rejected() {
+    let (e, _admin, _, client) = setup_test_env();
+
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&e, &token_address);
+
+    let resolution_deadline = 2000;
+    let market_id = create_test_market(&client, &e, resolution_deadline);
+
+    // Stake only on outcome 0.
+    let bettor = Address::generate(&e);
+    token_client.mint(&bettor, &1000);
+    client.place_bet(&bettor, &market_id, &0, &1000, &token_address, &None);
+
+    // Attempt to resolve to outcome 1, which has zero stake.
+    let result = client.try_resolve_market(&market_id, &1);
+    assert!(result.is_err());
+
+    // Market must not be left Resolved with a zero-stake winner.
+    let market = client.get_market(&market_id).unwrap();
+    assert_ne!(market.status, types::MarketStatus::Resolved);
+}
+
+/// Oracle resolution to a zero-stake outcome must likewise be rejected.
+#[test]
+fn test_oracle_resolution_zero_stake_outcome_rejected() {
+    let (e, _admin, _, client) = setup_test_env();
+
+    let token_admin = Address::generate(&e);
+    let token_id = e.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_address = token_id.address();
+    let token_client = token::StellarAssetClient::new(&e, &token_address);
+
+    let resolution_deadline = 2000;
+    let market_id = create_test_market(&client, &e, resolution_deadline);
+
+    let bettor = Address::generate(&e);
+    token_client.mint(&bettor, &1000);
+    client.place_bet(&bettor, &market_id, &0, &1000, &token_address, &None);
+
+    // Oracle reports outcome 1 (zero stake).
+    client.set_oracle_result(&market_id, &0, &1);
+    e.ledger().with_mut(|li| li.timestamp = resolution_deadline);
+    let result = client.try_attempt_oracle_resolution(&market_id);
+    assert!(result.is_err());
+
+    let market = client.get_market(&market_id).unwrap();
+    assert_ne!(market.status, types::MarketStatus::Resolved);
 }

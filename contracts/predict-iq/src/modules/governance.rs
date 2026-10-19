@@ -96,6 +96,28 @@ pub fn remove_guardian(e: &Env, address: Address) -> Result<(), ErrorCode> {
         return Err(ErrorCode::GuardianNotSet);
     }
 
+    // Issue #1700: never silently replace an in-flight removal proposal (which
+    // would discard its votes and any passed-at timestamp). Only allow a new
+    // proposal once the existing one has expired.
+    if let Some(existing) = e
+        .storage()
+        .persistent()
+        .get::<_, crate::types::PendingGuardianRemoval>(&ConfigKey::PendingGuardianRemoval)
+    {
+        let now = e.ledger().timestamp();
+        let expired =
+            now.saturating_sub(existing.initiated_at) > GUARDIAN_REMOVAL_VOTE_WINDOW;
+        if !expired {
+            return Err(ErrorCode::RemovalAlreadyPending);
+        }
+        e.storage()
+            .persistent()
+            .remove(&ConfigKey::PendingGuardianRemoval);
+        e.storage()
+            .persistent()
+            .remove(&ConfigKey::PendingGuardianRemovalPassedAt);
+    }
+
     // Initiate removal proposal
     let pending_removal = crate::types::PendingGuardianRemoval {
         target_guardian: address.clone(),
@@ -170,11 +192,20 @@ pub fn vote_on_guardian_removal(e: &Env, voter: Address, approve: bool) -> Resul
         pending_removal.votes_against.push_back(voter);
     }
 
-    // Calculate if majority reached (excluding target guardian)
-    let other_guardians_count = guardians.len() as u32 - 1;
-    let votes_needed = (other_guardians_count * MAJORITY_THRESHOLD_PERCENT) / 100 + 1;
+    // Issue #1699: use the same power-weighted majority rule as upgrades,
+    // excluding the target guardian from both the yes-power and total power.
+    let target = pending_removal.target_guardian.clone();
+    let eligible: Vec<Guardian> = {
+        let mut v: Vec<Guardian> = Vec::new(e);
+        for g in guardians.iter() {
+            if g.address != target {
+                v.push_back(g);
+            }
+        }
+        v
+    };
 
-    if pending_removal.votes_for.len() as u32 >= votes_needed
+    if is_power_majority_met(e, &eligible, &pending_removal.votes_for)
         && get_guardian_removal_passed_at(e).is_none()
     {
         set_guardian_removal_passed_at(e);
@@ -182,7 +213,7 @@ pub fn vote_on_guardian_removal(e: &Env, voter: Address, approve: bool) -> Resul
 
     // Issue #1194: a majority voting "against" formally kills the proposal
     // rather than leaving it to linger until it either passes or expires.
-    if pending_removal.votes_against.len() as u32 >= votes_needed {
+    if is_power_majority_met(e, &eligible, &pending_removal.votes_against) {
         e.storage()
             .persistent()
             .remove(&ConfigKey::PendingGuardianRemoval);
@@ -424,30 +455,33 @@ pub fn is_timelock_satisfied(e: &Env) -> Result<bool, ErrorCode> {
     Ok(elapsed >= get_timelock_duration(e))
 }
 
-/// Check if majority vote threshold has been met.
-fn is_majority_met(e: &Env, pending_upgrade: &PendingUpgrade) -> bool {
-    let guardians = get_guardians(e);
+/// Issue #1699: shared power-weighted majority rule used by every governance
+/// path (upgrades and guardian removal). Sums the `voting_power` of the
+/// addresses in `votes` against the total `voting_power` of `eligible` and
+/// checks it against `MAJORITY_THRESHOLD_PERCENT`.
+fn is_power_majority_met(e: &Env, eligible: &Vec<Guardian>, votes: &Vec<Address>) -> bool {
+    let _ = e;
 
-    if guardians.is_empty() {
+    if eligible.is_empty() {
         return false;
     }
 
-    // Sum total voting power across all guardians
+    // Sum total voting power across all eligible guardians
     let mut total_power: u32 = 0;
-    for i in 0..guardians.len() {
-        total_power += guardians.get(i).unwrap().voting_power;
+    for i in 0..eligible.len() {
+        total_power += eligible.get(i).unwrap().voting_power;
     }
 
     if total_power == 0 {
         return false;
     }
 
-    // Sum voting power of guardians who voted for
+    // Sum voting power of guardians who voted in favour
     let mut power_for: u32 = 0;
-    for i in 0..pending_upgrade.votes_for.len() {
-        let voter = pending_upgrade.votes_for.get(i).unwrap();
-        for j in 0..guardians.len() {
-            let g = guardians.get(j).unwrap();
+    for i in 0..votes.len() {
+        let voter = votes.get(i).unwrap();
+        for j in 0..eligible.len() {
+            let g = eligible.get(j).unwrap();
             if g.address == voter {
                 power_for += g.voting_power;
                 break;
@@ -458,6 +492,12 @@ fn is_majority_met(e: &Env, pending_upgrade: &PendingUpgrade) -> bool {
     // Calculate percentage: (power_for / total_power) * 100
     let percentage = (power_for * 100) / total_power;
     percentage >= MAJORITY_THRESHOLD_PERCENT
+}
+
+/// Check if majority vote threshold has been met for the pending upgrade.
+fn is_majority_met(e: &Env, pending_upgrade: &PendingUpgrade) -> bool {
+    let guardians = get_guardians(e);
+    is_power_majority_met(e, &guardians, &pending_upgrade.votes_for)
 }
 
 /// Execute the upgrade if timelock is satisfied and majority voted in favor.

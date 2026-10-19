@@ -97,6 +97,13 @@ pub fn attempt_oracle_resolution(e: &Env, market_id: u64) -> Result<(), ErrorCod
 
     // Attempt oracle resolution
     if let Some(oracle_outcome) = oracles::get_oracle_result(e, market_id, 0) {
+        // Issue #1698: reject a resolution whose winning outcome has no stake,
+        // otherwise the whole pool would be permanently locked (claim_winnings
+        // returns NoWinnings to everyone and there is no refund path).
+        if markets::get_outcome_stake(e, market_id, oracle_outcome) == 0 {
+            return Err(ErrorCode::ZeroWinningStake);
+        }
+
         let old_status = soroban_sdk::String::from_slice(e, "Active");
         let new_status = soroban_sdk::String::from_slice(e, "PendingResolution");
 
@@ -150,6 +157,13 @@ pub fn finalize_resolution(e: &Env, market_id: u64) -> Result<(), ErrorCode> {
             let winning_outcome = market
                 .winning_outcome
                 .ok_or(ErrorCode::ResolutionNotReady)?;
+
+            // Issue #1698: a Resolved market must have a non-zero winning stake,
+            // otherwise the pool is permanently locked with no refund path.
+            if markets::get_outcome_stake(e, market_id, winning_outcome) == 0 {
+                return Err(ErrorCode::ZeroWinningStake);
+            }
+
             let old_status = soroban_sdk::String::from_slice(e, "PendingResolution");
             let new_status = soroban_sdk::String::from_slice(e, "Resolved");
 
@@ -190,6 +204,13 @@ pub fn finalize_resolution(e: &Env, market_id: u64) -> Result<(), ErrorCode> {
 
             // Calculate voting outcome
             let winning_outcome = calculate_voting_outcome(e, &market)?;
+
+            // Issue #1698: a Resolved market must have a non-zero winning stake,
+            // otherwise the pool is permanently locked with no refund path.
+            if markets::get_outcome_stake(e, market_id, winning_outcome) == 0 {
+                return Err(ErrorCode::ZeroWinningStake);
+            }
+
             let old_status = soroban_sdk::String::from_slice(e, "Disputed");
             let new_status = soroban_sdk::String::from_slice(e, "Resolved");
 
@@ -330,5 +351,25 @@ mod tests {
 
         let result = calculate_voting_outcome(&e, &market);
         assert_eq!(result, Err(ErrorCode::ArithmeticOverflow));
+    }
+
+    // Issue #1698: resolving to an outcome with zero stake must be rejected so
+    // the pool cannot be permanently locked.
+    #[test]
+    fn test_finalize_resolution_rejects_zero_winning_stake() {
+        let e = Env::default();
+        let mut market = setup_market(&e);
+        market.status = MarketStatus::PendingResolution;
+        market.winning_outcome = Some(0);
+        market.pending_resolution_timestamp = Some(0);
+        markets::set_market_for_test(&e, &market);
+
+        // No stake was ever placed on outcome 0.
+        let result = finalize_resolution(&e, market.id);
+        assert_eq!(result, Err(ErrorCode::ZeroWinningStake));
+
+        // Market must remain unresolved.
+        let stored = markets::get_market(&e, market.id).unwrap();
+        assert_eq!(stored.status, MarketStatus::PendingResolution);
     }
 }
