@@ -4,6 +4,11 @@ use crate::types::{MarketStatus, CANCEL_OUTCOME_INDEX};
 use soroban_sdk::{Address, Env};
 
 const FAILED_MARKET_THRESHOLD_BPS: i128 = 7500; // 75% vote required to cancel
+/// Voting window length, matching the 72h rule used by `finalize_resolution`.
+const VOTING_PERIOD_SECONDS: u64 = 72 * 60 * 60;
+/// Minimum number of votes cast (summed across all outcomes) required before a
+/// vote-driven cancellation can be evaluated.
+const CANCEL_QUORUM: i128 = 1;
 
 /// Admin override to cancel a market
 pub fn cancel_market_admin(e: &Env, market_id: u64) -> Result<(), ErrorCode> {
@@ -35,15 +40,34 @@ pub fn cancel_market_vote(e: &Env, market_id: u64) -> Result<(), ErrorCode> {
         return Err(ErrorCode::MarketNotDisputed);
     }
 
+    // Issue #1692: the voting window must have closed before a vote-driven
+    // cancellation can be evaluated, using the same 72h rule as
+    // `finalize_resolution`. Otherwise a single early voter holding 100% of a
+    // tiny tally could cancel the market immediately.
+    let voting_start = market
+        .dispute_timestamp
+        .ok_or(ErrorCode::VotingNotStarted)?;
+    let voting_end = voting_start
+        .checked_add(VOTING_PERIOD_SECONDS)
+        .ok_or(ErrorCode::ArithmeticOverflow)?;
+    if e.ledger().timestamp() < voting_end {
+        return Err(ErrorCode::VotingNotEnded);
+    }
+
     // Calculate if cancellation threshold is met
     let cancel_votes = crate::modules::voting::get_tally(e, market_id, CANCEL_OUTCOME_INDEX);
     let mut total_votes = cancel_votes;
 
     for outcome in 0..market.options.len() {
-        total_votes += crate::modules::voting::get_tally(e, market_id, outcome);
+        let tally = crate::modules::voting::get_tally(e, market_id, outcome);
+        total_votes = total_votes
+            .checked_add(tally)
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
     }
 
-    if total_votes == 0 {
+    // Issue #1692: require a quorum of votes cast before evaluating the
+    // cancellation threshold.
+    if total_votes < CANCEL_QUORUM {
         return Err(ErrorCode::InsufficientVotingWeight);
     }
 
@@ -163,6 +187,8 @@ mod cancellation_event_tests {
             use soroban_sdk::String;
 
             // Seed market in Disputed status (required by cancel_market_vote).
+            // The dispute timestamp is set far enough in the past that the 72h
+            // voting window has already closed.
             let market = Market {
                 id: market_id,
                 creator: Address::generate(&e),
@@ -211,5 +237,76 @@ mod cancellation_event_tests {
             events_debug.contains(&version_debug),
             "EVENT_VERSION ({version_debug}) not found in event data: {events_debug}"
         );
+    }
+
+    /// Issue #1692: a vote-driven cancellation must not succeed while the
+    /// voting window is still open, even if the cancel tally already exceeds
+    /// the 75% threshold.
+    #[test]
+    fn cancel_market_vote_rejected_before_voting_window_closes() {
+        let e = Env::default();
+        e.mock_all_auths();
+
+        let (contract_id, _admin) = setup_contract_with_admin(&e);
+        let market_id: u64 = 8;
+
+        e.as_contract(&contract_id, || {
+            use crate::types::{Market, MarketStatus, OracleConfig};
+
+            let now = e.ledger().timestamp();
+            let market = Market {
+                id: market_id,
+                creator: Address::generate(&e),
+                status: MarketStatus::Disputed,
+                winning_outcome: None,
+                resolved_at: None,
+                dispute_timestamp: Some(now),
+                pending_resolution_timestamp: None,
+                resolution_deadline: 9_999_999,
+                oracle_config: OracleConfig::default(),
+            };
+            crate::modules::markets::update_market(&e, market);
+
+            crate::modules::voting::set_tally_for_test(
+                &e,
+                market_id,
+                crate::types::CANCEL_OUTCOME_INDEX,
+                10_000,
+            );
+
+            let result = cancel_market_vote(&e, market_id);
+            assert_eq!(result, Err(ErrorCode::VotingNotEnded));
+        });
+    }
+
+    /// Issue #1692: a vote-driven cancellation must be rejected when no votes
+    /// have been cast (quorum not met), even after the window has closed.
+    #[test]
+    fn cancel_market_vote_rejected_without_quorum() {
+        let e = Env::default();
+        e.mock_all_auths();
+
+        let (contract_id, _admin) = setup_contract_with_admin(&e);
+        let market_id: u64 = 9;
+
+        e.as_contract(&contract_id, || {
+            use crate::types::{Market, MarketStatus, OracleConfig};
+
+            let market = Market {
+                id: market_id,
+                creator: Address::generate(&e),
+                status: MarketStatus::Disputed,
+                winning_outcome: None,
+                resolved_at: None,
+                dispute_timestamp: Some(0),
+                pending_resolution_timestamp: None,
+                resolution_deadline: 9_999_999,
+                oracle_config: OracleConfig::default(),
+            };
+            crate::modules::markets::update_market(&e, market);
+
+            let result = cancel_market_vote(&e, market_id);
+            assert_eq!(result, Err(ErrorCode::InsufficientVotingWeight));
+        });
     }
 }

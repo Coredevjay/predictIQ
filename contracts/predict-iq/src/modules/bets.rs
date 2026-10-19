@@ -106,7 +106,7 @@ pub fn place_bet(
     }
 
     if token_address != market.token_address {
-        return Err(ErrorCode::InvalidBetAmount);
+        return Err(ErrorCode::InvalidToken);
     }
 
     // Check if user's tokens are frozen for SAC-wrapped assets

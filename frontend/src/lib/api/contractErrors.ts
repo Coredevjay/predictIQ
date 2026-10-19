@@ -144,6 +144,10 @@ const CONTRACT_ERROR_LABELS: Record<number, string> = {
   158: 'Resolution deadline passed',
   159: 'Overflow',
   160: 'Invalid time range',
+  161: 'Invalid token',
+  162: 'Already voted on removal',
+  163: 'Removal not pending',
+  164: 'Removal expired',
 };
 
 export interface ContractError {
