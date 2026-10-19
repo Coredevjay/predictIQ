@@ -200,4 +200,7 @@ pub enum ErrorCode {
     /// The per-market dispute voter registry has reached its maximum size and cannot
     /// accept additional voters.
     TooManyDisputeVoters = 164,
+
+    /// The provided base fee is outside the allowed range (0 to 10_000 bps).
+    InvalidBaseFee = 165,
 }

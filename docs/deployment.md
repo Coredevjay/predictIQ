@@ -127,7 +127,29 @@ DATABASE_URL="postgres://user:password@<rds-endpoint>:5432/predictiq" \
   bash services/api/scripts/run_migrations.sh
 ```
 
-### Step 7 — Configure AWS Secrets Manager
+### Step 7 — Initialize the PredictIQ contract
+
+The Soroban contract must be initialized exactly once after deployment. `initialize` takes the `admin` address and the protocol `base_fee` (in basis points):
+
+```bash
+stellar contract invoke \
+  --id "$PREDICTIQ_CONTRACT_ID" \
+  --source <admin-identity> \
+  --network testnet \
+  -- initialize \
+  --admin <admin-address> \
+  --base_fee 250
+```
+
+Initialization requirements:
+
+- **Authorization.** `initialize` calls `admin.require_auth()`, so the transaction must be signed by the `admin` key being installed. There is no unauthenticated path to set the admin.
+- **Base fee range.** `base_fee` is expressed in basis points and must satisfy `0 <= base_fee <= 10_000`. Values above `10_000` are rejected with `FeeTooHigh`.
+- **One-time only.** A second call to `initialize` fails with `AlreadyInitialized`; the admin can only be changed through the contract's admin-gated setters.
+- **Front-running.** Because the admin must authorize the call, initialize immediately after deploying and use a controlled admin key (e.g. a multisig or the deployer identity) so no third party can claim the admin role first.
+
+### Step 8 — Configure AWS Secrets Manager
+=======
 
 Store secrets that the ECS task reads at runtime:
 

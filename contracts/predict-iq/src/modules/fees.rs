@@ -1,10 +1,13 @@
 use crate::errors::ErrorCode;
-use crate::modules::admin;
+use crate::modules::{admin, circuit_breaker};
 use crate::types::{ConfigKey, MarketTier, TTL_HIGH_THRESHOLD, TTL_LOW_THRESHOLD};
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 const BPS_DENOMINATOR: i128 = 10_000;
 const TIER_DENOMINATOR_BPS: i128 = 10_000;
+
+/// Issue #1687: Referral share of the fee, expressed in basis points (10%).
+pub const REFERRAL_SHARE_BPS: i128 = 1_000;
 
 #[contracttype]
 pub enum DataKey {
@@ -131,6 +134,8 @@ pub fn withdraw_protocol_fees(
     token: &Address,
     recipient: &Address,
 ) -> Result<i128, ErrorCode> {
+    // Issue #1685: token egress must respect the emergency pause.
+    circuit_breaker::require_not_paused_for_high_risk(e)?;
     require_fee_withdraw_auth(e)?;
 
     let key = DataKey::FeeRevenue(token.clone());
@@ -158,15 +163,18 @@ pub fn withdraw_protocol_fees(
 }
 
 /// Issue #1: Referral reward keyed by (referrer, token) to prevent cross-asset mixing.
+///
+/// Issue #1687: Returns the exact reward credited so callers can persist it and
+/// later reverse precisely that amount (avoiding aggregate-vs-per-bet rounding drift).
 pub fn add_referral_reward(
     e: &Env,
     referrer: &Address,
     token: &Address,
     fee_amount: i128,
-) -> Result<(), ErrorCode> {
+) -> Result<i128, ErrorCode> {
     let reward = fee_amount
-        .checked_mul(10)
-        .and_then(|n| n.checked_div(100))
+        .checked_mul(REFERRAL_SHARE_BPS)
+        .and_then(|n| n.checked_div(BPS_DENOMINATOR))
         .ok_or(ErrorCode::Overflow)?;
     let key = DataKey::ReferrerBalance(referrer.clone(), token.clone());
     let balance: i128 = e.storage().persistent().get(&key).unwrap_or(0);
@@ -174,17 +182,17 @@ pub fn add_referral_reward(
     e.storage().persistent().set(&key, &new_balance);
 
     crate::modules::events::emit_referral_reward(e, 0, referrer.clone(), reward);
-    Ok(())
+    Ok(reward)
 }
 
 /// Reverse a referral reward that was credited at bet time.
 /// Called during cancellation refund to void rewards from cancelled markets.
-pub fn reverse_referral_reward(e: &Env, referrer: &Address, token: &Address, fee_amount: i128) {
-    let reward = match fee_amount.checked_mul(10).and_then(|n| n.checked_div(100)) {
-        Some(r) => r,
-        None => return, // overflow on a reversal is a no-op; balance stays as-is
-    };
-    if reward == 0 {
+///
+/// Issue #1686/#1687: Takes the exact reward amount that was credited for the
+/// bet (as returned by `add_referral_reward`) rather than recomputing it from
+/// the fee, so reversal subtracts exactly what was added.
+pub fn reverse_referral_reward(e: &Env, referrer: &Address, token: &Address, reward: i128) {
+    if reward <= 0 {
         return;
     }
     let key = DataKey::ReferrerBalance(referrer.clone(), token.clone());
@@ -222,6 +230,8 @@ pub fn claim_referral_rewards(
     address: &Address,
     token: &Address,
 ) -> Result<i128, ErrorCode> {
+    // Issue #1685: token egress must respect the emergency pause.
+    circuit_breaker::require_not_paused_for_high_risk(e)?;
     address.require_auth();
 
     let key = DataKey::ReferrerBalance(address.clone(), token.clone());
@@ -239,17 +249,6 @@ pub fn claim_referral_rewards(
     crate::modules::events::emit_referral_claimed(e, 0, address.clone(), balance);
 
     Ok(balance)
-}
-
-/// Issue #511: Distribute referral fees on market resolution
-/// Called during market resolution to distribute accumulated referral rewards
-pub fn distribute_referral_fees(e: &Env, market_id: u64, token: &Address) -> Result<(), ErrorCode> {
-    // Get all referrers for this market and distribute their accumulated rewards
-    // This is a placeholder that would iterate through referrers in production
-    // For now, the rewards are already tracked in ReferrerBalance and can be claimed
-
-    crate::modules::events::emit_referral_distribution(e, market_id, token.clone());
-    Ok(())
 }
 
 #[cfg(test)]

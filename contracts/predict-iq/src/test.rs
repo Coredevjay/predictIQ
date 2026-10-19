@@ -2265,6 +2265,35 @@ fn test_initialize_rejects_non_deployer() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_initialize_requires_auth() {
+    let e = Env::default();
+    // Do NOT mock all auths — initialize must require auth from the admin
+    // address being installed, so an unauthenticated call must fail.
+    let contract_id = e.register(PredictIQ, ());
+    let client = PredictIQClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+
+    let result = client.try_initialize(&admin, &100);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_initialize_rejects_out_of_range_base_fee() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(PredictIQ, ());
+    let client = PredictIQClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+
+    // base_fee is in bps; 10_001 exceeds the 10_000 bps (100%) maximum.
+    let result = client.try_initialize(&admin, &10_001);
+    assert_eq!(result, Err(Ok(ErrorCode::FeeTooHigh)));
+}
+
 // ─── Fee Calculation Unit Tests ───────────────────────────────────────────────
 
 mod fee_calculation_tests {

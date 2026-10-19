@@ -22,6 +22,14 @@ impl PredictIQ {
             return Err(ErrorCode::AlreadyInitialized);
         }
 
+        if base_fee < 0 {
+            return Err(ErrorCode::InvalidAmount);
+        }
+        if base_fee > 10_000 {
+            return Err(ErrorCode::FeeTooHigh);
+        }
+
+        admin.require_auth();
         admin::set_admin(&e, admin);
         e.storage().persistent().set(&ConfigKey::BaseFee, &base_fee);
         e.storage().persistent().set(

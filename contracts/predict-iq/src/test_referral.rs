@@ -181,6 +181,101 @@ fn test_nonexistent_referrer_no_crash() {
 }
 
 #[test]
+fn test_referral_share_bps_constant_is_ten_percent() {
+    // Issue #1687: the referral share must come from a single named constant
+    // rather than duplicated magic numbers.
+    assert_eq!(crate::modules::fees::REFERRAL_SHARE_BPS, 10u32);
+}
+
+#[test]
+fn test_referral_reward_uses_share_bps_consistently() {
+    let (env, client, user_a, user_b, token_address, _contract_id) = setup_test();
+
+    let oracle = Address::generate(&env);
+    let mut options = Vec::new(&env);
+    options.push_back(String::from_str(&env, "Yes"));
+    options.push_back(String::from_str(&env, "No"));
+
+    let market_id = client.create_market(
+        &user_a,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 300,
+            max_confidence_bps: 200,
+        strike_price: None,
+        },
+        &token_address,
+    );
+
+    // Two bets whose per-bet rewards are computed with the same constant.
+    let bet_amount = 1000i128;
+    let fee_bps = 100i128; // 1% fee configured in setup_test
+    let expected_per_bet = bet_amount * fee_bps / 10_000
+        * (crate::modules::fees::REFERRAL_SHARE_BPS as i128)
+        / 10_000;
+
+    client.place_bet(&user_b, &market_id, &0, &bet_amount, &token_address, &Some(user_a.clone()));
+    client.place_bet(&user_b, &market_id, &0, &bet_amount, &token_address, &Some(user_a.clone()));
+
+    // The credited reward is the sum of the per-bet rewards, not a rounded
+    // aggregate, so add/reverse cannot drift.
+    let claimed = client.claim_referral_rewards(&user_a, &token_address);
+    assert_eq!(claimed, expected_per_bet * 2);
+}
+
+#[test]
+fn test_no_referral_distribution_event_emitted() {
+    // Issue #1688: the placeholder `distribute_referral_fees` and its
+    // `referral_distribution` event were removed; rewards are pull-based via
+    // `claim_referral_rewards`, which must not emit a distribution event.
+    let (env, client, user_a, user_b, token_address, _contract_id) = setup_test();
+
+    let oracle = Address::generate(&env);
+    let mut options = Vec::new(&env);
+    options.push_back(String::from_str(&env, "Yes"));
+    options.push_back(String::from_str(&env, "No"));
+
+    let market_id = client.create_market(
+        &user_a,
+        &String::from_str(&env, "Test Market"),
+        &options,
+        &(env.ledger().timestamp() + 1000),
+        &(env.ledger().timestamp() + 2000),
+        &types::OracleConfig {
+            oracle_address: oracle,
+            feed_id: String::from_str(&env, "test"),
+            min_responses: 1,
+            max_staleness_seconds: 300,
+            max_confidence_bps: 200,
+        strike_price: None,
+        },
+        &token_address,
+    );
+
+    client.place_bet(&user_b, &market_id, &0, &1000, &token_address, &Some(user_a.clone()));
+    let _ = client.claim_referral_rewards(&user_a, &token_address);
+
+    // No `referral_distribution` (or `ref_dist`) event should have been emitted.
+    let events = env.events().all();
+    for event in events.iter() {
+        let topics = event.1;
+        for topic in topics.iter() {
+            if let Ok(sym) = soroban_sdk::Symbol::try_from_val(&env, &topic) {
+                let name = sym.to_string();
+                assert_ne!(name, String::from_str(&env, "referral_distribution"));
+                assert_ne!(name, String::from_str(&env, "ref_dist"));
+            }
+        }
+    }
+}
+
+#[test]
 fn test_multi_token_referral_rewards_separation() {
     let (env, client, user_a, user_b, token_address, _contract_id) = setup_test();
     
