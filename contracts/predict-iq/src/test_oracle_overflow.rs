@@ -33,7 +33,7 @@ fn oracle_config(env: &Env, max_confidence_bps: u64) -> OracleConfig {
     OracleConfig {
         oracle_address: Address::generate(env),
         // feed_id length doesn't matter for validate_price; use a short placeholder.
-        feed_id: String::from_str(env, "test"),
+        feed_id: String::from_str(env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: u64::MAX, // never stale in these tests
         max_confidence_bps,

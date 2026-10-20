@@ -4,7 +4,9 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 mod errors;
 mod modules;
 pub mod pyth_client;
+#[cfg(test)]
 mod test;
+#[cfg(test)]
 mod test_pyth_integration;
 pub mod types;
 
@@ -350,6 +352,21 @@ impl PredictIQ {
         native_token: Address,
     ) -> Result<(), ErrorCode> {
         crate::modules::markets::release_creation_deposit(&e, market_id, native_token)
+    }
+
+    /// Issue #1714: Allow a settlement token for new markets (admin only)
+    pub fn add_allowed_token(e: Env, token: Address) -> Result<(), ErrorCode> {
+        crate::modules::markets::add_allowed_token(&e, token)
+    }
+
+    /// Issue #1714: Remove a settlement token from the allowlist (admin only)
+    pub fn remove_allowed_token(e: Env, token: Address) -> Result<(), ErrorCode> {
+        crate::modules::markets::remove_allowed_token(&e, token)
+    }
+
+    /// Issue #1714: Whether a token may be used as a market settlement asset
+    pub fn is_token_allowed(e: Env, token: Address) -> bool {
+        crate::modules::markets::is_token_allowed(&e, &token)
     }
 
     /// Issue #507: Set market creation fee (admin only)

@@ -227,4 +227,16 @@ pub enum ErrorCode {
 
     /// A guardian removal proposal is already pending and has not expired or been rejected.
     RemovalAlreadyPending = 202,
+
+    /// The market description exceeds the maximum allowed byte length.
+    DescriptionTooLong = 203,
+
+    /// An outcome label is empty or exceeds the maximum allowed byte length.
+    InvalidOptionLength = 204,
+
+    /// The settlement token is not on the admin-managed allowlist.
+    TokenNotAllowed = 205,
+
+    /// The oracle configuration failed validation at market creation.
+    InvalidOracleConfig = 206,
 }

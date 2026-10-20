@@ -122,7 +122,7 @@ mod tests {
         let token = Address::generate(e);
         let oracle_cfg = OracleConfig {
             oracle_address: Address::generate(e),
-            feed_id: String::from_str(e, "feed"),
+            feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: None,
             max_staleness_seconds: 3600,
             max_confidence_bps: 100,

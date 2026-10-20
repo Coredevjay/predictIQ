@@ -40,7 +40,7 @@ fn test_referral_reward_calculation() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -79,7 +79,7 @@ fn test_multiple_referral_claims() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -124,7 +124,7 @@ fn test_no_referrer_no_crash() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -158,7 +158,7 @@ fn test_nonexistent_referrer_no_crash() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -204,7 +204,7 @@ fn test_referral_reward_uses_share_bps_consistently() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -249,7 +249,7 @@ fn test_no_referral_distribution_event_emitted() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -298,7 +298,7 @@ fn test_multi_token_referral_rewards_separation() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle.clone(),
-            feed_id: String::from_str(&env, "test1"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -316,7 +316,7 @@ fn test_multi_token_referral_rewards_separation() {
         &(env.ledger().timestamp() + 2000),
         &types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test2"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
