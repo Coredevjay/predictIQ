@@ -26,6 +26,29 @@ variable "api_desired_count" {
   type = number
 }
 
+variable "api_min_count" {
+  type        = number
+  default     = 2
+  description = "Minimum number of API tasks for autoscaling"
+}
+
+variable "api_max_count" {
+  type        = number
+  default     = 10
+  description = "Maximum number of API tasks for autoscaling"
+}
+
+variable "autoscaling_cpu_target" {
+  type    = number
+  default = 60
+}
+
+variable "autoscaling_requests_per_target" {
+  type        = number
+  default     = 1000
+  description = "Target ALB requests per target per minute"
+}
+
 variable "api_cpu" {
   type = number
 }
@@ -427,6 +450,11 @@ resource "aws_ecs_service" "api" {
   desired_count   = var.api_desired_count
   launch_type     = "FARGATE"
 
+  # Desired count is owned by the autoscaler after the first apply.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   # Zero-downtime rolling deploy: always keep 100 % capacity during updates,
   # allow up to 200 % so new tasks start before old ones are drained.
   deployment_minimum_healthy_percent = 100
@@ -749,6 +777,53 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 }
 
+# ── Autoscaling ────────────────────────────────────────────────────────────────
+
+resource "aws_appautoscaling_target" "api" {
+  service_namespace  = "ecs"
+  scalable_dimension = "ecs:service:DesiredCount"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.api.name}"
+  min_capacity       = var.api_min_count
+  max_capacity       = var.api_max_count
+}
+
+resource "aws_appautoscaling_policy" "api_cpu" {
+  name               = "predictiq-${var.environment}-api-cpu-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
+  resource_id        = aws_appautoscaling_target.api.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.autoscaling_cpu_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+
+resource "aws_appautoscaling_policy" "api_requests" {
+  name               = "predictiq-${var.environment}-api-requests-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
+  resource_id        = aws_appautoscaling_target.api.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.autoscaling_requests_per_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.main.arn_suffix}/${aws_lb_target_group.api.arn_suffix}"
+    }
+  }
+}
+
 # ── Data sources / Outputs ─────────────────────────────────────────────────────
 
 data "aws_region" "current" {}
@@ -765,6 +840,14 @@ output "cluster_name" {
 
 output "service_name" {
   value = aws_ecs_service.api.name
+}
+
+output "alb_arn_suffix" {
+  value = aws_lb.main.arn_suffix
+}
+
+output "target_group_arn_suffix" {
+  value = aws_lb_target_group.api.arn_suffix
 }
 
 output "alb_dns_name" {

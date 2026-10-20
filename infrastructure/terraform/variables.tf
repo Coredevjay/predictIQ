@@ -183,6 +183,35 @@ variable "api_desired_count" {
   }
 }
 
+variable "api_min_count" {
+  description = "Minimum API tasks for autoscaling"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.api_min_count >= 1 && var.api_min_count <= var.api_max_count
+    error_message = "api_min_count must be >= 1 and <= api_max_count."
+  }
+}
+
+variable "api_max_count" {
+  description = "Maximum API tasks for autoscaling"
+  type        = number
+  default     = 10
+}
+
+variable "rds_free_storage_alarm_bytes" {
+  description = "Alarm when RDS free storage drops below this many bytes"
+  type        = number
+  default     = 5368709120
+}
+
+variable "alb_latency_alarm_seconds" {
+  description = "Alarm when ALB p95 TargetResponseTime exceeds this many seconds"
+  type        = number
+  default     = 1
+}
+
 variable "api_cpu" {
   description = "API task CPU units"
   type        = number
