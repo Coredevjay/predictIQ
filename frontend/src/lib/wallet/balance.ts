@@ -99,3 +99,32 @@ export async function sendPayment(
   const result = await server.submitTransaction(transaction);
   return result.hash;
 }
+
+export async function fetchNativeBalance(
+  publicKey: string,
+  network: string = 'TESTNET'
+): Promise<string | null> {
+  return getBalance(publicKey, network);
+}
+
+/**
+ * Balance of a classic asset for an account (native XLM when `issuer` is
+ * 'native'). Horizon does not list Soroban-only tokens, so those yield null.
+ */
+export async function fetchAssetBalance(
+  publicKey: string,
+  network: string,
+  code: string,
+  issuer: string
+): Promise<string | null> {
+  if (issuer === 'native') return fetchNativeBalance(publicKey, network);
+  try {
+    const account = await getHorizonServer(network).loadAccount(publicKey);
+    const found = account.balances.find(
+      (b) => 'asset_code' in b && b.asset_code === code && b.asset_issuer === issuer
+    );
+    return found ? found.balance : '0';
+  } catch {
+    return null;
+  }
+}

@@ -3,7 +3,7 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import { getEnvConfig } from '@/lib/env';
-import { getConnectedWalletAddress } from '@/lib/wallet';
+import { useWallet } from '@/lib/wallet/WalletProvider';
 import { getSupportedAsset } from '@/lib/assets';
 import { TokenSelector } from '@/components/markets/TokenSelector';
 import {
@@ -30,6 +30,7 @@ interface CreateMarketResponse {
 
 export default function CreateMarketPage() {
   const router = useRouter();
+  const { address: walletAddress } = useWallet();
   const [values, setValues] = React.useState<MarketFormValues>(EMPTY_FORM);
   const [errors, setErrors] = React.useState<MarketFormErrors>({});
   const [submitting, setSubmitting] = React.useState(false);
@@ -67,7 +68,7 @@ export default function CreateMarketPage() {
       return;
     }
 
-    const wallet = getConnectedWalletAddress();
+    const wallet = walletAddress;
     if (!wallet) {
       setErrors({ form: 'Connect a wallet before creating a market.' });
       return;

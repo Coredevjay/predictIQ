@@ -40,8 +40,10 @@ jest.mock('../../../lib/api/public-client', () => {
 });
 
 const mockFetchNativeBalance = jest.fn();
+const mockFetchAssetBalance = jest.fn();
 jest.mock('../../../lib/wallet/balance', () => ({
   fetchNativeBalance: (...args: unknown[]) => mockFetchNativeBalance(...args),
+  fetchAssetBalance: (...args: unknown[]) => mockFetchAssetBalance(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -328,6 +330,26 @@ describe('PlaceBetForm', () => {
         expect(alert).toHaveTextContent(/12\.5000000/);
         expect(alert).toHaveTextContent(/100 XLM/);
       });
+    });
+
+    it("shows the market's settlement asset code, not XLM", async () => {
+      const usdc = 'GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN';
+      mockPlaceBet.mockRejectedValue(
+        new ApiError('Insufficient balance.', 400, 'CONTRACT_ERROR', { contract_code: 107 })
+      );
+      mockFetchAssetBalance.mockResolvedValue('3.0000000');
+
+      render(<PlaceBetForm market={{ ...MARKET, token_address: usdc }} />);
+      fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '10' } });
+      fireEvent.click(screen.getByRole('button', { name: /place bet/i }));
+
+      await waitFor(() => {
+        const alert = screen.getByRole('alert');
+        expect(alert).toHaveTextContent(/3\.0000000 USDC/);
+        expect(alert).toHaveTextContent(/10 USDC/);
+        expect(alert).not.toHaveTextContent(/XLM/);
+      });
+      expect(mockFetchAssetBalance).toHaveBeenCalledWith(WALLET_ADDRESS, 'TESTNET', 'USDC', usdc);
     });
 
     it('shows "unavailable" when fetchNativeBalance returns null', async () => {
