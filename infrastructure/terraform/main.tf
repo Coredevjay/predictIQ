@@ -116,9 +116,11 @@ module "ecs" {
   api_image_uri         = var.api_image_uri
   api_container_port    = var.api_container_port
   api_desired_count     = var.api_desired_count
+  api_min_count         = var.api_min_count
+  api_max_count         = var.api_max_count
   api_cpu               = var.api_cpu
   api_memory            = var.api_memory
-  db_host               = module.rds.endpoint
+  db_host               = module.rds.address
   db_port               = 5432
   db_name               = var.db_name
   db_user               = var.db_username
@@ -130,6 +132,16 @@ module "ecs" {
   hmac_key              = var.hmac_key
   sendgrid_api_key      = var.sendgrid_api_key
   api_signing_key       = var.api_signing_key
+  app_env                    = var.app_env
+  base_url                   = var.base_url
+  cors_allowed_origins       = var.cors_allowed_origins
+  from_email                 = var.from_email
+  blockchain_rpc_url         = var.blockchain_rpc_url
+  predictiq_contract_id      = var.predictiq_contract_id
+  api_keys                   = var.api_keys
+  unsubscribe_signing_secret = var.unsubscribe_signing_secret
+  sendgrid_webhook_secret    = var.sendgrid_webhook_secret
+  email_idempotency_secret   = var.email_idempotency_secret
   ecs_tasks_sg_id       = aws_security_group.ecs_tasks.id
   otlp_endpoint         = var.otlp_endpoint
 }
@@ -140,6 +152,14 @@ module "monitoring" {
   environment = var.environment
   ecs_cluster = module.ecs.cluster_name
   ecs_service = module.ecs.service_name
+
+  alb_arn_suffix          = module.ecs.alb_arn_suffix
+  target_group_arn_suffix = module.ecs.target_group_arn_suffix
+  rds_instance_id         = module.rds.instance_id
+  redis_replication_group = module.redis.replication_group_id
+  api_desired_count       = var.api_desired_count
+  rds_free_storage_bytes  = var.rds_free_storage_alarm_bytes
+  alb_latency_seconds     = var.alb_latency_alarm_seconds
 
   alert_email_endpoints = var.alert_email_endpoints
   alert_https_endpoints = var.alert_https_endpoints

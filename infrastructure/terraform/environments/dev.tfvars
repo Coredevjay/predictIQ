@@ -7,5 +7,6 @@ backup_retention_days = 7
 redis_node_type     = "cache.t3.micro"
 redis_num_nodes     = 1
 api_desired_count   = 1
+api_min_count       = 1
 api_cpu             = 256
 api_memory          = 512

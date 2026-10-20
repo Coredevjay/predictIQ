@@ -95,6 +95,16 @@ jobs:
       TF_VAR_hmac_key: ${{ secrets[format('HMAC_KEY_{0}', matrix.environment)] }}
       TF_VAR_sendgrid_api_key: ${{ secrets[format('SENDGRID_API_KEY_{0}', matrix.environment)] }}
       TF_VAR_api_signing_key: ${{ secrets[format('API_SIGNING_KEY_{0}', matrix.environment)] }}
+      TF_VAR_api_keys: ${{ secrets[format('API_KEYS_{0}', matrix.environment)] }}
+      TF_VAR_unsubscribe_signing_secret: ${{ secrets[format('UNSUBSCRIBE_SIGNING_SECRET_{0}', matrix.environment)] }}
+      TF_VAR_sendgrid_webhook_secret: ${{ secrets[format('SENDGRID_WEBHOOK_SECRET_{0}', matrix.environment)] }}
+      TF_VAR_email_idempotency_secret: ${{ secrets[format('EMAIL_IDEMPOTENCY_SECRET_{0}', matrix.environment)] }}
+      TF_VAR_base_url: ${{ secrets[format('BASE_URL_{0}', matrix.environment)] }}
+      TF_VAR_cors_allowed_origins: ${{ secrets[format('CORS_ALLOWED_ORIGINS_{0}', matrix.environment)] }}
+      TF_VAR_from_email: ${{ secrets[format('FROM_EMAIL_{0}', matrix.environment)] }}
+      TF_VAR_blockchain_rpc_url: ${{ secrets[format('BLOCKCHAIN_RPC_URL_{0}', matrix.environment)] }}
+      TF_VAR_predictiq_contract_id: ${{ secrets[format('PREDICTIQ_CONTRACT_ID_{0}', matrix.environment)] }}
+      TF_VAR_app_env: ${{ secrets[format('APP_ENV_{0}', matrix.environment)] }}
       TF_VAR_acm_certificate_arn: ${{ secrets[format('ACM_CERTIFICATE_ARN_{0}', matrix.environment)] }}
       TF_VAR_api_image_uri: ${{ secrets[format('API_IMAGE_URI_{0}', matrix.environment)] }}
       TF_VAR_redis_auth_token: ${{ secrets[format('REDIS_AUTH_TOKEN_{0}', matrix.environment)] }}
@@ -168,6 +178,16 @@ jobs:
       TF_VAR_hmac_key: ${{ secrets[format('HMAC_KEY_{0}', matrix.environment)] }}
       TF_VAR_sendgrid_api_key: ${{ secrets[format('SENDGRID_API_KEY_{0}', matrix.environment)] }}
       TF_VAR_api_signing_key: ${{ secrets[format('API_SIGNING_KEY_{0}', matrix.environment)] }}
+      TF_VAR_api_keys: ${{ secrets[format('API_KEYS_{0}', matrix.environment)] }}
+      TF_VAR_unsubscribe_signing_secret: ${{ secrets[format('UNSUBSCRIBE_SIGNING_SECRET_{0}', matrix.environment)] }}
+      TF_VAR_sendgrid_webhook_secret: ${{ secrets[format('SENDGRID_WEBHOOK_SECRET_{0}', matrix.environment)] }}
+      TF_VAR_email_idempotency_secret: ${{ secrets[format('EMAIL_IDEMPOTENCY_SECRET_{0}', matrix.environment)] }}
+      TF_VAR_base_url: ${{ secrets[format('BASE_URL_{0}', matrix.environment)] }}
+      TF_VAR_cors_allowed_origins: ${{ secrets[format('CORS_ALLOWED_ORIGINS_{0}', matrix.environment)] }}
+      TF_VAR_from_email: ${{ secrets[format('FROM_EMAIL_{0}', matrix.environment)] }}
+      TF_VAR_blockchain_rpc_url: ${{ secrets[format('BLOCKCHAIN_RPC_URL_{0}', matrix.environment)] }}
+      TF_VAR_predictiq_contract_id: ${{ secrets[format('PREDICTIQ_CONTRACT_ID_{0}', matrix.environment)] }}
+      TF_VAR_app_env: ${{ secrets[format('APP_ENV_{0}', matrix.environment)] }}
       TF_VAR_acm_certificate_arn: ${{ secrets[format('ACM_CERTIFICATE_ARN_{0}', matrix.environment)] }}
       TF_VAR_api_image_uri: ${{ secrets[format('API_IMAGE_URI_{0}', matrix.environment)] }}
       TF_VAR_redis_auth_token: ${{ secrets[format('REDIS_AUTH_TOKEN_{0}', matrix.environment)] }}

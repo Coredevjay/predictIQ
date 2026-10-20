@@ -416,14 +416,14 @@ fn test_resolve_with_pyth_outcome_below_strike() {
     e.ledger().set_timestamp(1_700_000_060);
 
     let pyth_addr = e.register(MockPythContract, ());
-    // strike_price = 10_000_000 → price (5_000_000) < strike → outcome 1
+    // strike_price = $100,000 in 1e-8 units → price ($50,000, expo -2) < strike → outcome 1
     let config = OracleConfig {
         oracle_address: pyth_addr,
         feed_id: btc_usd_feed_id(&e),
         min_responses: Some(1),
         max_staleness_seconds: u64::MAX,
         max_confidence_bps: 500,
-        strike_price: Some(10_000_000),
+        strike_price: Some(10_000_000_000_000),
     };
 
     let result = resolve_with_pyth(&e, 2u64, 0u32, &config);
@@ -514,4 +514,14 @@ fn test_contract_attempt_oracle_resolution_with_mock_pyth() {
     let market = client.get_market(&market_id).unwrap();
     assert_eq!(market.status, MarketStatus::PendingResolution);
     assert_eq!(market.winning_outcome, Some(0));
+}
+
+/// Issue #1706: prices are normalised to 1e-8 before comparing with strike_price.
+#[test]
+fn test_normalize_price_handles_negative_exponents() {
+    use crate::modules::oracles::normalize_price;
+    assert_eq!(normalize_price(5_000_000, -2), 5_000_000_000_000);
+    assert_eq!(normalize_price(6_500_000_000_000, -8), 6_500_000_000_000);
+    assert_eq!(normalize_price(65_000, 0), 6_500_000_000_000);
+    assert_eq!(normalize_price(123_456_789_012, -10), 1_234_567_890);
 }

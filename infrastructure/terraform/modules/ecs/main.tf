@@ -26,6 +26,29 @@ variable "api_desired_count" {
   type = number
 }
 
+variable "api_min_count" {
+  type        = number
+  default     = 2
+  description = "Minimum number of API tasks for autoscaling"
+}
+
+variable "api_max_count" {
+  type        = number
+  default     = 10
+  description = "Maximum number of API tasks for autoscaling"
+}
+
+variable "autoscaling_cpu_target" {
+  type    = number
+  default = 60
+}
+
+variable "autoscaling_requests_per_target" {
+  type        = number
+  default     = 1000
+  description = "Target ALB requests per target per minute"
+}
+
 variable "api_cpu" {
   type = number
 }
@@ -125,6 +148,61 @@ variable "api_signing_key" {
   sensitive   = true
 }
 
+variable "app_env" {
+  type        = string
+  description = "Value for APP_ENV/RUST_ENV; one of development, staging, production"
+  validation {
+    condition     = contains(["development", "staging", "production"], var.app_env)
+    error_message = "app_env must be one of: development, staging, production."
+  }
+}
+
+variable "base_url" {
+  type        = string
+  description = "Public base URL injected as BASE_URL"
+}
+
+variable "cors_allowed_origins" {
+  type        = string
+  description = "Comma-separated origins injected as CORS_ALLOWED_ORIGINS"
+}
+
+variable "from_email" {
+  type        = string
+  description = "Sender address injected as FROM_EMAIL"
+}
+
+variable "blockchain_rpc_url" {
+  type        = string
+  description = "Soroban RPC URL injected as BLOCKCHAIN_RPC_URL"
+}
+
+variable "predictiq_contract_id" {
+  type        = string
+  description = "Contract ID injected as PREDICTIQ_CONTRACT_ID"
+}
+
+variable "api_keys" {
+  type        = string
+  sensitive   = true
+  description = "Comma-separated API keys injected as API_KEYS"
+}
+
+variable "unsubscribe_signing_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "sendgrid_webhook_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "email_idempotency_secret" {
+  type      = string
+  sensitive = true
+}
+
 variable "otlp_endpoint" {
   type        = string
   default     = ""
@@ -149,6 +227,13 @@ variable "alb_deletion_protection" {
 }
 
 locals {
+  extra_secrets = {
+    api_keys                   = { env = "API_KEYS", value = var.api_keys }
+    unsubscribe_signing_secret = { env = "UNSUBSCRIBE_SIGNING_SECRET", value = var.unsubscribe_signing_secret }
+    sendgrid_webhook_secret    = { env = "SENDGRID_WEBHOOK_SECRET", value = var.sendgrid_webhook_secret }
+    email_idempotency_secret   = { env = "EMAIL_IDEMPOTENCY_SECRET", value = var.email_idempotency_secret }
+  }
+
   common_tags = {
     Project     = "predictiq"
     Environment = var.environment
@@ -253,7 +338,14 @@ resource "aws_ecs_task_definition" "api" {
         {
           name  = "ENVIRONMENT"
           value = var.environment
-        }
+        },
+        { name = "APP_ENV", value = var.app_env },
+        { name = "RUST_ENV", value = var.app_env },
+        { name = "BASE_URL", value = var.base_url },
+        { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
+        { name = "FROM_EMAIL", value = var.from_email },
+        { name = "BLOCKCHAIN_RPC_URL", value = var.blockchain_rpc_url },
+        { name = "PREDICTIQ_CONTRACT_ID", value = var.predictiq_contract_id }
         ], var.otlp_endpoint == "" ? [] : [
         {
           name  = "OTLP_ENDPOINT"
@@ -262,7 +354,7 @@ resource "aws_ecs_task_definition" "api" {
       ])
       # All secrets are injected from AWS Secrets Manager — no plaintext
       # environment variables for sensitive values.
-      secrets = [
+      secrets = concat([
         {
           name      = "DB_HOST"
           valueFrom = aws_secretsmanager_secret.db_host.arn
@@ -308,10 +400,16 @@ resource "aws_ecs_task_definition" "api" {
           valueFrom = aws_secretsmanager_secret.sendgrid_key_rotated_at.arn
         },
         {
-          name      = "API_SIGNING_KEY"
+          # The API reads this value as REQUEST_SIGNING_SECRET (no reader exists for API_SIGNING_KEY).
+          name      = "REQUEST_SIGNING_SECRET"
           valueFrom = aws_secretsmanager_secret.api_signing_key.arn
         }
-      ]
+      ], [
+        for k, v in local.extra_secrets : {
+          name      = v.env
+          valueFrom = aws_secretsmanager_secret.extra[k].arn
+        }
+      ])
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -605,6 +703,11 @@ resource "aws_ecs_service" "api" {
   desired_count   = var.api_desired_count
   launch_type     = "FARGATE"
 
+  # Desired count is owned by the autoscaler after the first apply.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   # Zero-downtime rolling deploy: always keep 100 % capacity during updates,
   # allow up to 200 % so new tasks start before old ones are drained.
   deployment_minimum_healthy_percent = 100
@@ -833,6 +936,22 @@ resource "aws_secretsmanager_secret" "api_signing_key" {
   })
 }
 
+resource "aws_secretsmanager_secret" "extra" {
+  for_each    = local.extra_secrets
+  name        = "predictiq/${var.environment}/${replace(each.key, "_", "-")}"
+  description = "Injected into the API task as ${each.value.env}"
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-${replace(each.key, "_", "-")}"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "extra" {
+  for_each      = local.extra_secrets
+  secret_id     = aws_secretsmanager_secret.extra[each.key].id
+  secret_string = each.value.value
+}
+
 resource "aws_secretsmanager_secret_version" "api_signing_key" {
   secret_id     = aws_secretsmanager_secret.api_signing_key.id
   secret_string = var.api_signing_key
@@ -880,7 +999,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [
+        Resource = concat([
           aws_secretsmanager_secret.db_host.arn,
           aws_secretsmanager_secret.db_port.arn,
           aws_secretsmanager_secret.db_name.arn,
@@ -893,7 +1012,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
           aws_secretsmanager_secret.sendgrid_api_key.arn,
           aws_secretsmanager_secret.sendgrid_key_rotated_at.arn,
           aws_secretsmanager_secret.api_signing_key.arn,
-        ]
+        ], [for s in aws_secretsmanager_secret.extra : s.arn])
       },
       {
         Effect   = "Allow"
@@ -927,6 +1046,53 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 }
 
+# ── Autoscaling ────────────────────────────────────────────────────────────────
+
+resource "aws_appautoscaling_target" "api" {
+  service_namespace  = "ecs"
+  scalable_dimension = "ecs:service:DesiredCount"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.api.name}"
+  min_capacity       = var.api_min_count
+  max_capacity       = var.api_max_count
+}
+
+resource "aws_appautoscaling_policy" "api_cpu" {
+  name               = "predictiq-${var.environment}-api-cpu-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
+  resource_id        = aws_appautoscaling_target.api.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.autoscaling_cpu_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+
+resource "aws_appautoscaling_policy" "api_requests" {
+  name               = "predictiq-${var.environment}-api-requests-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
+  resource_id        = aws_appautoscaling_target.api.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.autoscaling_requests_per_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.main.arn_suffix}/${aws_lb_target_group.api.arn_suffix}"
+    }
+  }
+}
+
 # ── Data sources / Outputs ─────────────────────────────────────────────────────
 
 data "aws_region" "current" {}
@@ -943,6 +1109,14 @@ output "cluster_name" {
 
 output "service_name" {
   value = aws_ecs_service.api.name
+}
+
+output "alb_arn_suffix" {
+  value = aws_lb.main.arn_suffix
+}
+
+output "target_group_arn_suffix" {
+  value = aws_lb_target_group.api.arn_suffix
 }
 
 output "alb_dns_name" {
