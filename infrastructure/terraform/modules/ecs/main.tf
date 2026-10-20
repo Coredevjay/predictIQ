@@ -102,6 +102,61 @@ variable "api_signing_key" {
   sensitive   = true
 }
 
+variable "app_env" {
+  type        = string
+  description = "Value for APP_ENV/RUST_ENV; one of development, staging, production"
+  validation {
+    condition     = contains(["development", "staging", "production"], var.app_env)
+    error_message = "app_env must be one of: development, staging, production."
+  }
+}
+
+variable "base_url" {
+  type        = string
+  description = "Public base URL injected as BASE_URL"
+}
+
+variable "cors_allowed_origins" {
+  type        = string
+  description = "Comma-separated origins injected as CORS_ALLOWED_ORIGINS"
+}
+
+variable "from_email" {
+  type        = string
+  description = "Sender address injected as FROM_EMAIL"
+}
+
+variable "blockchain_rpc_url" {
+  type        = string
+  description = "Soroban RPC URL injected as BLOCKCHAIN_RPC_URL"
+}
+
+variable "predictiq_contract_id" {
+  type        = string
+  description = "Contract ID injected as PREDICTIQ_CONTRACT_ID"
+}
+
+variable "api_keys" {
+  type        = string
+  sensitive   = true
+  description = "Comma-separated API keys injected as API_KEYS"
+}
+
+variable "unsubscribe_signing_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "sendgrid_webhook_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "email_idempotency_secret" {
+  type      = string
+  sensitive = true
+}
+
 variable "otlp_endpoint" {
   type        = string
   default     = ""
@@ -114,6 +169,13 @@ variable "ecs_tasks_sg_id" {
 }
 
 locals {
+  extra_secrets = {
+    api_keys                   = { env = "API_KEYS", value = var.api_keys }
+    unsubscribe_signing_secret = { env = "UNSUBSCRIBE_SIGNING_SECRET", value = var.unsubscribe_signing_secret }
+    sendgrid_webhook_secret    = { env = "SENDGRID_WEBHOOK_SECRET", value = var.sendgrid_webhook_secret }
+    email_idempotency_secret   = { env = "EMAIL_IDEMPOTENCY_SECRET", value = var.email_idempotency_secret }
+  }
+
   common_tags = {
     Project     = "predictiq"
     Environment = var.environment
@@ -173,7 +235,14 @@ resource "aws_ecs_task_definition" "api" {
         {
           name  = "ENVIRONMENT"
           value = var.environment
-        }
+        },
+        { name = "APP_ENV", value = var.app_env },
+        { name = "RUST_ENV", value = var.app_env },
+        { name = "BASE_URL", value = var.base_url },
+        { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
+        { name = "FROM_EMAIL", value = var.from_email },
+        { name = "BLOCKCHAIN_RPC_URL", value = var.blockchain_rpc_url },
+        { name = "PREDICTIQ_CONTRACT_ID", value = var.predictiq_contract_id }
         ], var.otlp_endpoint == "" ? [] : [
         {
           name  = "OTLP_ENDPOINT"
@@ -182,7 +251,7 @@ resource "aws_ecs_task_definition" "api" {
       ])
       # All secrets are injected from AWS Secrets Manager — no plaintext
       # environment variables for sensitive values.
-      secrets = [
+      secrets = concat([
         {
           name      = "DB_HOST"
           valueFrom = aws_secretsmanager_secret.db_host.arn
@@ -220,10 +289,16 @@ resource "aws_ecs_task_definition" "api" {
           valueFrom = aws_secretsmanager_secret.sendgrid_key_rotated_at.arn
         },
         {
-          name      = "API_SIGNING_KEY"
+          # The API reads this value as REQUEST_SIGNING_SECRET (no reader exists for API_SIGNING_KEY).
+          name      = "REQUEST_SIGNING_SECRET"
           valueFrom = aws_secretsmanager_secret.api_signing_key.arn
         }
-      ]
+      ], [
+        for k, v in local.extra_secrets : {
+          name      = v.env
+          valueFrom = aws_secretsmanager_secret.extra[k].arn
+        }
+      ])
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -535,6 +610,22 @@ resource "aws_secretsmanager_secret" "api_signing_key" {
   })
 }
 
+resource "aws_secretsmanager_secret" "extra" {
+  for_each    = local.extra_secrets
+  name        = "predictiq/${var.environment}/${replace(each.key, "_", "-")}"
+  description = "Injected into the API task as ${each.value.env}"
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-${replace(each.key, "_", "-")}"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "extra" {
+  for_each      = local.extra_secrets
+  secret_id     = aws_secretsmanager_secret.extra[each.key].id
+  secret_string = each.value.value
+}
+
 resource "aws_secretsmanager_secret_version" "api_signing_key" {
   secret_id     = aws_secretsmanager_secret.api_signing_key.id
   secret_string = var.api_signing_key
@@ -582,7 +673,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [
+        Resource = concat([
           aws_secretsmanager_secret.db_host.arn,
           aws_secretsmanager_secret.db_port.arn,
           aws_secretsmanager_secret.db_name.arn,
@@ -593,7 +684,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
           aws_secretsmanager_secret.sendgrid_api_key.arn,
           aws_secretsmanager_secret.sendgrid_key_rotated_at.arn,
           aws_secretsmanager_secret.api_signing_key.arn,
-        ]
+        ], [for s in aws_secretsmanager_secret.extra : s.arn])
       }
     ]
   })

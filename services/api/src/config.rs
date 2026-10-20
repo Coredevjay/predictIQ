@@ -99,6 +99,20 @@ fn hmac_key_entropy(data: &[u8]) -> f64 {
         .sum()
 }
 
+/// Known `APP_ENV` values. Startup fails for anything else so a typo (or a
+/// mismatched variable name in the deployment) cannot silently disable
+/// production safety checks.
+pub fn validate_app_env(value: &str) -> Result<(), String> {
+    const KNOWN: [&str; 3] = ["development", "staging", "production"];
+    if KNOWN.iter().any(|k| k.eq_ignore_ascii_case(value)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "APP_ENV={value:?} is not a known environment (expected one of {KNOWN:?})"
+        ))
+    }
+}
+
 // ── CORS configuration ────────────────────────────────────────────────────────
 
 /// CORS policy loaded from environment variables.
@@ -643,7 +657,13 @@ impl Config {
             is_production: env::var("APP_ENV")
                 .map(|v| v.eq_ignore_ascii_case("production"))
                 .unwrap_or(false),
-            app_env: env::var("APP_ENV").unwrap_or_else(|_| "development".to_string()),
+            app_env: {
+                let value = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+                if let Err(msg) = validate_app_env(&value) {
+                    panic!("{msg}");
+                }
+                value
+            },
             require_https: env::var("REQUIRE_HTTPS")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
@@ -1122,6 +1142,14 @@ impl ContractKeySchema {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validate_app_env_rejects_unknown_values() {
+        assert!(super::validate_app_env("production").is_ok());
+        assert!(super::validate_app_env("Staging").is_ok());
+        assert!(super::validate_app_env("prod").is_err());
+        assert!(super::validate_app_env("").is_err());
+    }
+
     use super::*;
 
     #[test]

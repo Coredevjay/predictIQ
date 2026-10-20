@@ -222,9 +222,9 @@ The ECS task definition (`infrastructure/terraform/modules/ecs/main.tf`) injects
 | `HMAC_KEY` | `secrets` | `aws_secretsmanager_secret.hmac_key` |
 | `SENDGRID_API_KEY` | `secrets` | `aws_secretsmanager_secret.sendgrid_api_key` |
 | `SENDGRID_KEY_ROTATED_AT` | `secrets` | `aws_secretsmanager_secret.sendgrid_key_rotated_at` |
-| `API_SIGNING_KEY` | `secrets` | `aws_secretsmanager_secret.api_signing_key` |
+| `REQUEST_SIGNING_SECRET` | `secrets` | `aws_secretsmanager_secret.api_signing_key` |
 
-Known divergences to reconcile with `services/api/.env.example`: the task definition supplies `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` separately rather than a single `DATABASE_URL`, and does not yet inject `API_KEYS`, `BASE_URL`, `FROM_EMAIL`, `UNSUBSCRIBE_SIGNING_SECRET`, `PREDICTIQ_CONTRACT_ID`, `BLOCKCHAIN_RPC_URL` or `STELLAR_NETWORK_PASSPHRASE`.
+Known divergence: the task definition supplies `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USER`/`DB_PASSWORD` separately rather than a single `DATABASE_URL` (`DB_HOST` is the RDS `address`, without port). `API_KEYS`, `UNSUBSCRIBE_SIGNING_SECRET`, `SENDGRID_WEBHOOK_SECRET` and `EMAIL_IDEMPOTENCY_SECRET` are injected as secrets; `APP_ENV`, `RUST_ENV`, `BASE_URL`, `CORS_ALLOWED_ORIGINS`, `FROM_EMAIL`, `BLOCKCHAIN_RPC_URL` and `PREDICTIQ_CONTRACT_ID` as environment variables.
 
 ### Updating a secret
 
