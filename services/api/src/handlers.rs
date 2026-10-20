@@ -1575,6 +1575,9 @@ pub async fn blockchain_user_bets(
     Path(user): Path<String>,
     Query(query): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !is_valid_stellar_public_key(&user) {
+        return Err(ApiError::bad_request("invalid Stellar public key"));
+    }
     let page_size = query.limit();
     // cursor encodes the page number (0-based).
     // Clamp to a sane maximum before any arithmetic to prevent overflow:
@@ -2183,6 +2186,81 @@ pub async fn rotate_api_key(
     ))
 }
 
+/// DELETE /api/v1/admin/api-keys/{id}
+///
+/// Revokes an API key immediately by setting `revoked_at`.  Keys are validated
+/// against the database on every request (no in-process cache), so the
+/// revocation takes effect at once.
+pub async fn revoke_api_key(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let revoked = state
+        .db
+        .api_key_revoke(id)
+        .await
+        .map_err(into_api_error)?;
+    if !revoked {
+        return Err(ApiError::not_found("API key not found or already revoked"));
+    }
+
+    let entry = crate::audit::AuditLogEntry {
+        id: None,
+        timestamp: chrono::Utc::now(),
+        actor: "admin".to_string(),
+        actor_ip: None,
+        action: "api_key_revoke".to_string(),
+        resource_type: "api_key".to_string(),
+        resource_id: Some(id.to_string()),
+        details: None,
+        status: crate::audit::AuditStatus::Success,
+        error_message: None,
+        request_id: None,
+        user_agent: None,
+    };
+    if let Err(e) = state.audit_logger.log(entry).await {
+        tracing::error!("Failed to write api-key revoke audit log: {e}");
+    }
+    tracing::info!(key_id = %id, "API key revoked");
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Returns true if `s` is a valid Stellar public key (`G…`, 56 chars, base32 + CRC16 checksum).
+fn is_valid_stellar_public_key(s: &str) -> bool {
+    if s.len() != 56 || !s.starts_with('G') {
+        return false;
+    }
+    let mut bits: u32 = 0;
+    let mut nbits = 0;
+    let mut bytes = Vec::with_capacity(35);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'2'..=b'7' => c - b'2' + 26,
+            _ => return false,
+        } as u32;
+        bits = (bits << 5) | v;
+        nbits += 5;
+        if nbits >= 8 {
+            nbits -= 8;
+            bytes.push((bits >> nbits) as u8);
+            bits &= (1 << nbits) - 1;
+        }
+    }
+    if bytes.len() != 35 || bytes[0] != 6 << 3 {
+        return false;
+    }
+    let mut crc: u16 = 0;
+    for &b in &bytes[..33] {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+        }
+    }
+    crc.to_le_bytes() == [bytes[33], bytes[34]]
+}
+
 /// Response item for GET /api/v1/admin/api-keys
 #[derive(Debug, Serialize)]
 pub struct ApiKeyListItem {
@@ -2226,6 +2304,18 @@ pub async fn list_api_keys(
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    #[test]
+    fn stellar_public_key_validation() {
+        assert!(is_valid_stellar_public_key(
+            "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZX"
+        ));
+        assert!(!is_valid_stellar_public_key(
+            "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZY"
+        ));
+        assert!(!is_valid_stellar_public_key("short"));
+        assert!(!is_valid_stellar_public_key(&"G".repeat(56)));
+    }
 
     /// The HTTP response body from ApiError::internal must never contain the
     /// underlying error message — only a generic sanitised string.
