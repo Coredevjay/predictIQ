@@ -23,7 +23,7 @@ fn setup() -> (Env, PredictIQClient<'static>, Address, Address) {
 fn oracle_config(env: &Env) -> OracleConfig {
     OracleConfig {
         oracle_address: Address::generate(env),
-        feed_id: String::from_str(env, "test"),
+        feed_id: String::from_str(env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,

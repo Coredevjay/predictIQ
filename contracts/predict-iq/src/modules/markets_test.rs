@@ -31,7 +31,7 @@ fn test_create_market_basic() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -68,7 +68,7 @@ fn test_create_market_with_single_option_fails() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -104,7 +104,7 @@ fn test_create_market_with_too_many_outcomes() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -142,7 +142,7 @@ fn test_create_market_deadline_in_past() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -178,7 +178,7 @@ fn test_create_market_resolution_before_deadline() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -214,7 +214,7 @@ fn test_market_id_increments() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -355,7 +355,7 @@ fn test_market_tiers() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -426,7 +426,7 @@ fn test_prune_market_before_grace_period() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -469,7 +469,7 @@ fn test_prune_market_after_grace_period() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -515,7 +515,7 @@ fn test_prune_unresolved_market_fails() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -556,7 +556,7 @@ fn test_prune_market_with_unclaimed_rewards_fails() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -609,7 +609,7 @@ fn test_prune_market_after_all_rewards_claimed() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -663,7 +663,7 @@ fn test_permissionless_prune_by_non_admin() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -708,7 +708,7 @@ fn test_permissionless_prune_by_non_admin() {
 fn make_oracle_config(env: &Env) -> OracleConfig {
     OracleConfig {
         oracle_address: Address::generate(env),
-        feed_id: String::from_str(env, "test"),
+        feed_id: String::from_str(env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -921,7 +921,7 @@ fn test_create_market_end_time_equals_start_time_rejected() {
     );
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -958,7 +958,7 @@ fn test_create_market_deadline_equals_current_time_rejected() {
     );
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -993,7 +993,7 @@ fn test_create_market_resolution_deadline_before_deadline_rejected() {
     );
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -1030,7 +1030,7 @@ fn test_create_market_valid_time_range_succeeds() {
     );
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -1053,4 +1053,116 @@ fn test_create_market_valid_time_range_succeeds() {
     );
 
     assert!(result.is_ok());
+}
+
+fn creation_args(
+    env: &Env,
+) -> (Vec<String>, OracleConfig, Address) {
+    let options = Vec::from_array(
+        env,
+        [String::from_str(env, "Yes"), String::from_str(env, "No")],
+    );
+    let oracle_config = OracleConfig {
+        oracle_address: Address::generate(env),
+        feed_id: String::from_str(
+            env,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ),
+        min_responses: Some(1),
+        max_staleness_seconds: 3600,
+        max_confidence_bps: 100,
+        strike_price: None,
+    };
+    (options, oracle_config, Address::generate(env))
+}
+
+#[test]
+fn test_create_market_rejects_oversized_description_and_option() {
+    let (env, client, admin) = setup();
+    let (options, oracle_config, token) = creation_args(&env);
+
+    let r = client.try_create_market(
+        &admin,
+        &String::from_bytes(&env, &[b'a'; 1025]),
+        &options,
+        &1000,
+        &100000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+    assert_eq!(r, Err(Ok(ErrorCode::DescriptionTooLong)));
+
+    let options = Vec::from_array(
+        &env,
+        [String::from_bytes(&env, &[b'b'; 129]), String::from_str(&env, "No")],
+    );
+    let r = client.try_create_market(
+        &admin,
+        &String::from_str(&env, "ok"),
+        &options,
+        &1000,
+        &100000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+    assert_eq!(r, Err(Ok(ErrorCode::InvalidOptionLength)));
+}
+
+#[test]
+fn test_create_market_rejects_token_not_on_allowlist() {
+    let (env, client, admin) = setup();
+    let (options, oracle_config, token) = creation_args(&env);
+    client.add_allowed_token(&Address::generate(&env));
+    assert!(!client.is_token_allowed(&token));
+
+    let r = client.try_create_market(
+        &admin,
+        &String::from_str(&env, "ok"),
+        &options,
+        &1000,
+        &100000,
+        &oracle_config,
+        &MarketTier::Basic,
+        &token,
+        &0,
+        &0,
+    );
+    assert_eq!(r, Err(Ok(ErrorCode::TokenNotAllowed)));
+}
+
+#[test]
+fn test_create_market_rejects_invalid_oracle_config() {
+    let (env, client, admin) = setup();
+    let (options, good, token) = creation_args(&env);
+
+    let mut zero_staleness = good.clone();
+    zero_staleness.max_staleness_seconds = 0;
+    let mut bad_conf = good.clone();
+    bad_conf.max_confidence_bps = 10_001;
+    let mut self_oracle = good.clone();
+    self_oracle.oracle_address = client.address.clone();
+    let mut bad_feed = good.clone();
+    bad_feed.feed_id = String::from_str(&env, "not_hex");
+
+    for cfg in [zero_staleness, bad_conf, self_oracle, bad_feed] {
+        let r = client.try_create_market(
+            &admin,
+            &String::from_str(&env, "ok"),
+            &options,
+            &1000,
+            &100000,
+            &cfg,
+            &MarketTier::Basic,
+            &token,
+            &0,
+            &0,
+        );
+        assert_eq!(r, Err(Ok(ErrorCode::InvalidOracleConfig)));
+    }
 }

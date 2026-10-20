@@ -555,13 +555,15 @@ pub async fn sendgrid_webhook_middleware(
         }
 
         let (parts, body) = request.into_parts();
-        let bytes = axum::body::to_bytes(body, usize::MAX)
+        let bytes = axum::body::to_bytes(body, crate::email::webhook::MAX_WEBHOOK_PAYLOAD_BYTES)
             .await
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
+            .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
 
         // Signature covers timestamp + payload per SendGrid spec
-        let signed_payload = format!("{}{}", ts_str, String::from_utf8_lossy(&bytes));
-        if !signing::verify_signature(signed_payload.as_bytes(), sig, secret) {
+        let mut signed_payload = Vec::with_capacity(ts_str.len() + bytes.len());
+        signed_payload.extend_from_slice(ts_str.as_bytes());
+        signed_payload.extend_from_slice(&bytes);
+        if !signing::verify_signature(&signed_payload, sig, secret) {
             return Err(StatusCode::UNAUTHORIZED);
         }
 

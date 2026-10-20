@@ -34,9 +34,32 @@ variable "api_memory" {
   type = number
 }
 
-variable "redis_url" {
+# Redis connection components. The REDIS_URL is assembled by the application at
+# runtime, so the credential-bearing URL never appears in Terraform state.
+variable "redis_host" {
+  type = string
+}
+
+variable "redis_port" {
+  type    = number
+  default = 6379
+}
+
+variable "redis_auth_token" {
   type      = string
   sensitive = true
+}
+
+variable "secret_rotation_lambda_arn" {
+  type        = string
+  default     = null
+  description = "ARN of a rotation Lambda for DB/Redis secrets. When set, 30-day automatic rotation is enabled."
+}
+
+variable "log_retention_days" {
+  type        = number
+  default     = null
+  description = "CloudWatch log retention. Defaults to 365 in prod and 7 elsewhere."
 }
 
 # Individual database credential components.
@@ -149,9 +172,46 @@ resource "aws_ecs_cluster" "main" {
   })
 }
 
+# Per-environment customer-managed key for secrets and logs.
+resource "aws_kms_key" "main" {
+  description             = "predictiq-${var.environment} secrets and log encryption"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableRootAccount"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "AllowCloudWatchLogs"
+        Effect    = "Allow"
+        Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }
+        Action    = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+        Resource  = "*"
+      }
+    ]
+  })
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-kms"
+  })
+}
+
+resource "aws_kms_alias" "main" {
+  name          = "alias/predictiq-${var.environment}"
+  target_key_id = aws_kms_key.main.key_id
+}
+
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/predictiq-${var.environment}"
-  retention_in_days = var.environment == "prod" ? 30 : 7
+  retention_in_days = coalesce(var.log_retention_days, var.environment == "prod" ? 365 : 7)
+  kms_key_id        = aws_kms_key.main.arn
 
   tags = merge(local.common_tags, {
     Name = "predictiq-${var.environment}-logs"
@@ -224,8 +284,16 @@ resource "aws_ecs_task_definition" "api" {
           valueFrom = aws_secretsmanager_secret.db_password.arn
         },
         {
-          name      = "REDIS_URL"
-          valueFrom = aws_secretsmanager_secret.redis_url.arn
+          name      = "REDIS_HOST"
+          valueFrom = aws_secretsmanager_secret.redis_host.arn
+        },
+        {
+          name      = "REDIS_PORT"
+          valueFrom = aws_secretsmanager_secret.redis_port.arn
+        },
+        {
+          name      = "REDIS_AUTH_TOKEN"
+          valueFrom = aws_secretsmanager_secret.redis_auth_token.arn
         },
         {
           name      = "HMAC_KEY"
@@ -572,20 +640,53 @@ resource "aws_ecs_service" "api" {
 # ECS task via the `secrets` block above.  No plaintext secrets are passed
 # through Terraform environment variables or ECS `environment` blocks.
 
-resource "aws_secretsmanager_secret" "redis_url" {
-  name        = "predictiq/${var.environment}/redis-url"
-  description = "Redis connection URL for the predictIQ API"
+resource "aws_secretsmanager_secret" "redis_host" {
+  name       = "predictiq/${var.environment}/redis-host"
+  kms_key_id = aws_kms_key.main.arn
+  tags       = merge(local.common_tags, { Name = "predictiq-${var.environment}-redis-host" })
+}
+
+resource "aws_secretsmanager_secret_version" "redis_host" {
+  secret_id     = aws_secretsmanager_secret.redis_host.id
+  secret_string = var.redis_host
+}
+
+resource "aws_secretsmanager_secret" "redis_port" {
+  name       = "predictiq/${var.environment}/redis-port"
+  kms_key_id = aws_kms_key.main.arn
+  tags       = merge(local.common_tags, { Name = "predictiq-${var.environment}-redis-port" })
+}
+
+resource "aws_secretsmanager_secret_version" "redis_port" {
+  secret_id     = aws_secretsmanager_secret.redis_port.id
+  secret_string = tostring(var.redis_port)
+}
+
+resource "aws_secretsmanager_secret" "redis_auth_token" {
+  name        = "predictiq/${var.environment}/redis-auth-token"
+  description = "Redis AUTH token. The application assembles REDIS_URL at runtime."
+  kms_key_id  = aws_kms_key.main.arn
 
   tags = merge(local.common_tags, {
-    Name            = "predictiq-${var.environment}-redis-url"
-    SecretType      = "connection-string"
-    RotationEnabled = "false"
+    Name            = "predictiq-${var.environment}-redis-auth-token"
+    SecretType      = "credential"
+    RotationEnabled = var.secret_rotation_lambda_arn != null ? "true" : "false"
   })
 }
 
-resource "aws_secretsmanager_secret_version" "redis_url" {
-  secret_id     = aws_secretsmanager_secret.redis_url.id
-  secret_string = var.redis_url
+resource "aws_secretsmanager_secret_version" "redis_auth_token" {
+  secret_id     = aws_secretsmanager_secret.redis_auth_token.id
+  secret_string = var.redis_auth_token
+}
+
+resource "aws_secretsmanager_secret_rotation" "redis_auth_token" {
+  count               = var.secret_rotation_lambda_arn != null ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.redis_auth_token.id
+  rotation_lambda_arn = var.secret_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 30
+  }
 }
 
 # ── Database credentials (individual secrets) ────────────────────────────────
@@ -596,6 +697,7 @@ resource "aws_secretsmanager_secret_version" "redis_url" {
 # inside a secrecy::SecretString — see services/api/src/config.rs.
 
 resource "aws_secretsmanager_secret" "db_host" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-host"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-host" })
 }
@@ -606,6 +708,7 @@ resource "aws_secretsmanager_secret_version" "db_host" {
 }
 
 resource "aws_secretsmanager_secret" "db_port" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-port"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-port" })
 }
@@ -616,6 +719,7 @@ resource "aws_secretsmanager_secret_version" "db_port" {
 }
 
 resource "aws_secretsmanager_secret" "db_name" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-name"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-name" })
 }
@@ -626,6 +730,7 @@ resource "aws_secretsmanager_secret_version" "db_name" {
 }
 
 resource "aws_secretsmanager_secret" "db_user" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-user"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-user" })
 }
@@ -636,9 +741,20 @@ resource "aws_secretsmanager_secret_version" "db_user" {
 }
 
 resource "aws_secretsmanager_secret" "db_password" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/db-password"
   description = "PostgreSQL password for the predictIQ application user. Never assembled into DATABASE_URL."
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-password" })
+}
+
+resource "aws_secretsmanager_secret_rotation" "db_password" {
+  count               = var.secret_rotation_lambda_arn != null ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.db_password.id
+  rotation_lambda_arn = var.secret_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 30
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "db_password" {
@@ -649,6 +765,7 @@ resource "aws_secretsmanager_secret_version" "db_password" {
 # ── SendGrid ────────────────────────────────────────────────────────────────
 
 resource "aws_secretsmanager_secret" "hmac_key" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/hmac-key"
   description = "HMAC secret key used to sign API payloads and webhook signatures"
 
@@ -666,6 +783,7 @@ resource "aws_secretsmanager_secret_version" "hmac_key" {
 }
 
 resource "aws_secretsmanager_secret" "sendgrid_api_key" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/sendgrid-api-key"
   description = "SendGrid API key used by the predictIQ API for transactional email. Rotate every 90 days — see docs/runbooks/sendgrid-api-key-rotation.md."
 
@@ -685,6 +803,7 @@ resource "aws_secretsmanager_secret_version" "sendgrid_api_key" {
 # Stores only the rotation date (YYYY-MM-DD string) — not the key itself.
 # The application reads this at startup to warn if the key is older than 90 days.
 resource "aws_secretsmanager_secret" "sendgrid_key_rotated_at" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/sendgrid-key-rotated-at"
   description = "ISO-8601 date (YYYY-MM-DD) when SENDGRID_API_KEY was last rotated. Update this alongside the key itself."
 
@@ -702,6 +821,7 @@ resource "aws_secretsmanager_secret_version" "sendgrid_key_rotated_at" {
 }
 
 resource "aws_secretsmanager_secret" "api_signing_key" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/api-signing-key"
   description = "Private key used to sign API responses"
 
@@ -766,12 +886,19 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
           aws_secretsmanager_secret.db_name.arn,
           aws_secretsmanager_secret.db_user.arn,
           aws_secretsmanager_secret.db_password.arn,
-          aws_secretsmanager_secret.redis_url.arn,
+          aws_secretsmanager_secret.redis_host.arn,
+          aws_secretsmanager_secret.redis_port.arn,
+          aws_secretsmanager_secret.redis_auth_token.arn,
           aws_secretsmanager_secret.hmac_key.arn,
           aws_secretsmanager_secret.sendgrid_api_key.arn,
           aws_secretsmanager_secret.sendgrid_key_rotated_at.arn,
           aws_secretsmanager_secret.api_signing_key.arn,
         ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = [aws_kms_key.main.arn]
       }
     ]
   })
@@ -804,6 +931,12 @@ resource "aws_iam_role" "ecs_task_role" {
 
 data "aws_region" "current" {}
 
+data "aws_caller_identity" "current" {}
+
+output "kms_key_arn" {
+  value = aws_kms_key.main.arn
+}
+
 output "cluster_name" {
   value = aws_ecs_cluster.main.name
 }
@@ -825,7 +958,9 @@ output "secret_arns" {
     db_name          = aws_secretsmanager_secret.db_name.arn
     db_user          = aws_secretsmanager_secret.db_user.arn
     db_password      = aws_secretsmanager_secret.db_password.arn
-    redis_url        = aws_secretsmanager_secret.redis_url.arn
+    redis_host       = aws_secretsmanager_secret.redis_host.arn
+    redis_port       = aws_secretsmanager_secret.redis_port.arn
+    redis_auth_token = aws_secretsmanager_secret.redis_auth_token.arn
     hmac_key         = aws_secretsmanager_secret.hmac_key.arn
     sendgrid_api_key = aws_secretsmanager_secret.sendgrid_api_key.arn
     api_signing_key  = aws_secretsmanager_secret.api_signing_key.arn

@@ -118,6 +118,9 @@ pub struct OracleConfig {
 // Gas optimization constants
 pub const MAX_PUSH_PAYOUT_WINNERS: u32 = 50; // Threshold for switching to pull mode
 pub const MAX_OUTCOMES_PER_MARKET: u32 = 100; // Limit to prevent excessive iteration
+pub const MAX_DESCRIPTION_BYTES: u32 = 1024; // Bound ledger entry size/rent
+pub const MAX_OPTION_BYTES: u32 = 128; // Bound per-outcome label size
+pub const MIN_OUTCOMES_PER_MARKET: u32 = 2;
 pub const CANCEL_OUTCOME_INDEX: u32 = u32::MAX; // Sentinel outcome for community cancel votes
 
 // Dispute voting constants
@@ -132,6 +135,10 @@ pub const VOTER_PRUNE_BATCH_SIZE: u32 = 50;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfigKey {
+    /// Presence key: settlement token is allowed for new markets.
+    AllowedToken(Address),
+    /// Number of tokens on the allowlist (0 = allowlist not configured).
+    AllowedTokenCount,
     Admin,
     MarketAdmin,
     FeeAdmin,

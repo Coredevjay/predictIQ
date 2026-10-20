@@ -9,6 +9,24 @@ This package contains the Handsoff web frontend.
 - [Design system](./docs/design-system.md) — design system guidelines and conventions for the frontend.
 - [`docs/`](./docs/) — additional frontend documentation.
 
+## On-chain contract writes
+
+`file_dispute`, `cast_vote`, and `claim_winnings` have no API route, so the
+pages that need them call the contract directly via
+[`src/lib/wallet/soroban.ts`](./src/lib/wallet/soroban.ts): build → wallet-sign
+→ submit to Soroban RPC. Configure it with:
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_CONTRACT_ID` | The PredictIQ contract id to invoke |
+| `NEXT_PUBLIC_SOROBAN_RPC_URL` | Soroban RPC endpoint for the contract's network |
+| `NEXT_PUBLIC_STELLAR_NETWORK_PASSPHRASE` | Network passphrase the wallet signs for (defaults to testnet) |
+
+When `NEXT_PUBLIC_CONTRACT_ID` or `NEXT_PUBLIC_SOROBAN_RPC_URL` is unset, those
+pages render a "not configured" message and disable the submit button rather
+than calling a nonexistent endpoint. See `.env.example` for examples.
+
+
 ## Styling conventions (CSP-safe, no inline styles)
 
 ### Why: the CSP constraint

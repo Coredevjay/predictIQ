@@ -38,6 +38,7 @@ describe('API Client', () => {
       ['newsletterGdprExport', () => api.newsletterGdprExport('a@b.com'), 'POST', '/api/v1/newsletter/gdpr/export'],
       ['newsletterGdprDelete', () => api.newsletterGdprDelete('a@b.com'), 'DELETE', '/api/v1/newsletter/gdpr/delete'],
       ['resolveMarket', () => api.resolveMarket(3), 'POST', '/api/v1/markets/3/resolve'],
+      ['cancelMarket', () => api.cancelMarket(3), 'POST', '/api/v1/markets/3/cancel'],
       ['emailPreview', () => api.emailPreview('welcome'), 'GET', '/api/v1/email/preview/welcome'],
       ['emailSendTest', () => api.emailSendTest({ recipient: 'a@b.com', template_name: 'welcome' }), 'POST', '/api/v1/email/test'],
       ['getEmailAnalytics', () => api.getEmailAnalytics({ days: 7 }), 'GET', '/api/v1/email/analytics'],
@@ -753,6 +754,15 @@ describe('API Client', () => {
       );
     });
 
+    it('cancelMarket encodes a slash in marketId', async () => {
+      mockOk();
+      await api.cancelMarket('10/20');
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${base}/api/v1/markets/10%2F20/cancel`,
+        expect.any(Object),
+      );
+    });
+
     it('emailPreview encodes a slash in templateName', async () => {
       mockOk();
       await api.emailPreview('welcome/v2');
@@ -843,6 +853,15 @@ describe('API Client', () => {
       await api.resolveMarket('10/20');
       expect(global.fetch).toHaveBeenCalledWith(
         `${base}/api/v1/markets/10%2F20/resolve`,
+        expect.any(Object),
+      );
+    });
+
+    it('cancelMarket encodes a slash in marketId', async () => {
+      mockOk();
+      await api.cancelMarket('10/20');
+      expect(global.fetch).toHaveBeenCalledWith(
+        `${base}/api/v1/markets/10%2F20/cancel`,
         expect.any(Object),
       );
     });

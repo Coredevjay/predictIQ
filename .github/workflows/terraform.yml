@@ -31,6 +31,10 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Security invariants (#1775 #1782 #1783 #1784)
+        run: bash tests/check_security_invariants.sh
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform fmt
         id: fmt
         run: terraform fmt -check -recursive
