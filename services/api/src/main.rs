@@ -51,6 +51,27 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
 async fn main() -> anyhow::Result<()> {
     let config = Config::from_env();
 
+    match std::env::args().nth(1).as_deref() {
+        // Container HEALTHCHECK probe: GET /health/live on the bind address.
+        Some("healthcheck") => {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", config.bind_addr.port())).await?;
+            conn.write_all(b"GET /health/live HTTP/1.0\r\nHost: localhost\r\n\r\n").await?;
+            let mut buf = Vec::new();
+            conn.read_to_end(&mut buf).await?;
+            let ok = buf.starts_with(b"HTTP/1.0 200") || buf.starts_with(b"HTTP/1.1 200");
+            std::process::exit(if ok { 0 } else { 1 });
+        }
+        // One-off migration task run before service rollout.
+        Some("migrate") => {
+            let pool = sqlx::PgPool::connect(&config.database_url).await?;
+            let applied = predictiq_api::migrations::MigrationRunner::new(&pool).run().await?;
+            println!("applied {applied} migration(s)");
+            return Ok(());
+        }
+        _ => {}
+    }
+
     tracing_config::init_tracing(
         "predictiq-api",
         env!("CARGO_PKG_VERSION"),
