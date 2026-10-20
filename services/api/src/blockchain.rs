@@ -1353,18 +1353,26 @@ impl BlockchainClient {
     pub async fn watch_transaction(&self, hash: &str) -> Result<(), WatchTxError> {
         let mut set = self.monitor.watched_txs.write().await;
 
-        // Evict TTL-expired entries first.
         let now = Instant::now();
-        let before = set.len();
-        set.retain(|_, inserted_at| now.duration_since(*inserted_at) < self.watched_tx_ttl);
-        let evicted = before - set.len();
-        if evicted > 0 {
-            self.metrics.observe_tx_eviction(evicted as u64);
-            tracing::info!(evicted, "watched_txs: TTL eviction");
+
+        // Evict TTL-expired entries only when the map is full, avoiding an
+        // O(n) scan under the write lock on every registration.
+        if set.len() >= self.watched_tx_max_size {
+            let before = set.len();
+            set.retain(|_, inserted_at| now.duration_since(*inserted_at) < self.watched_tx_ttl);
+            let evicted = before - set.len();
+            if evicted > 0 {
+                self.metrics.observe_tx_eviction(evicted as u64);
+                tracing::info!(evicted, "watched_txs: TTL eviction");
+            }
         }
 
-        // Deduplication check: reject if the hash is already being watched.
-        if set.contains_key(hash) {
+        // Deduplication check: reject if the hash is already being watched
+        // and has not expired.
+        if set
+            .get(hash)
+            .is_some_and(|t| now.duration_since(*t) < self.watched_tx_ttl)
+        {
             tracing::debug!(hash, "watch_transaction: hash already registered (dedup)");
             self.metrics.set_watched_tx_count(set.len() as i64);
             return Err(WatchTxError::AlreadyWatched);
@@ -1389,13 +1397,24 @@ impl BlockchainClient {
         let expires_at = Utc::now()
             + chrono::Duration::from_std(WATCHED_TX_TTL)
                 .unwrap_or(chrono::Duration::minutes(30));
-        let db = self.db.clone();
-        let hash_owned = hash.to_string();
-        tokio::spawn(async move {
-            if let Err(e) = db.watched_tx_upsert(&hash_owned, None, expires_at).await {
-                tracing::warn!(tx_hash = %hash_owned, error = %e, "failed to persist watched tx to database");
+        // Bound concurrent persistence tasks; the in-memory watch is still
+        // registered if the persistence budget is exhausted.
+        static PERSIST_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+        match PERSIST_PERMITS.try_acquire() {
+            Ok(permit) => {
+                let db = self.db.clone();
+                let hash_owned = hash.to_string();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(e) = db.watched_tx_upsert(&hash_owned, None, expires_at).await {
+                        tracing::warn!(tx_hash = %hash_owned, error = %e, "failed to persist watched tx to database");
+                    }
+                });
             }
-        });
+            Err(_) => {
+                tracing::warn!(tx_hash = %hash, "watched tx persistence skipped: too many pending writes");
+            }
+        }
 
         Ok(())
     }
