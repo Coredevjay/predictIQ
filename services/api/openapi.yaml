@@ -154,6 +154,36 @@ paths:
         "500":
           $ref: "#/components/responses/ApiError"
 
+  /api/v1/markets/{market_id}/cancel:
+    post:
+      tags: [markets]
+      operationId: cancelMarket
+      summary: Cancel a market and invalidate caches (admin)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/marketId"
+        - $ref: "#/components/parameters/apiVersion"
+      responses:
+        "200":
+          description: Cache invalidation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvalidationResult"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
   /api/v1/blockchain/health:
     get:
       tags: [blockchain]

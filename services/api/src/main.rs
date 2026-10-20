@@ -412,6 +412,10 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::resolve_market),
         )
         .route(
+            "/api/v1/markets/:market_id/cancel",
+            post(handlers::cancel_market),
+        )
+        .route(
             "/api/blockchain/replay",
             post(handlers::blockchain_replay),
         )
