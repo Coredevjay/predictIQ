@@ -121,7 +121,11 @@ output "endpoint" {
   sensitive = true
 }
 
-output "redis_url" {
-  value     = "redis://:${var.redis_auth_token}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379"
+output "port" {
+  value = aws_elasticache_replication_group.main.port
+}
+
+output "auth_token" {
+  value     = var.redis_auth_token
   sensitive = true
 }
