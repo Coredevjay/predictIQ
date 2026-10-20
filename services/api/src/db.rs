@@ -766,6 +766,8 @@ impl Database {
     ///
     /// Returns an error if the market does not exist or is not in `active` status.
     pub async fn resolve_market(&self, market_id: i64, outcome_index: u32) -> anyhow::Result<()> {
+        let outcome_index = i32::try_from(outcome_index)
+            .map_err(|_| anyhow::anyhow!("outcome_index {outcome_index} out of range"))?;
         let rows_affected = self
             .with_timeout(
                 "resolve_market",
@@ -774,7 +776,7 @@ impl Database {
                      SET status = 'resolved', outcome_index = $1, resolved_at = NOW() \
                      WHERE id = $2 AND status = 'active' AND deleted_at IS NULL",
                 )
-                .bind(outcome_index as i32)
+                .bind(outcome_index)
                 .bind(market_id)
                 .execute(&self.pool),
             )

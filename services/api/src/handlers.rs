@@ -462,13 +462,35 @@ fn check_gdpr_token(state: &AppState, email: &str, token: &str) -> Option<Respon
     None
 }
 
-fn is_disposable_email(email: &str) -> bool {
-    const DISPOSABLE_DOMAINS: &[&str] = &["mailinator.com", "tempmail.com", "guerrillamail.com"];
+/// Built-in disposable domains; extend at runtime via the comma-separated
+/// `DISPOSABLE_EMAIL_DOMAINS` env var. Subdomains of a listed domain match.
+const DISPOSABLE_DOMAINS: &[&str] = &[
+    "mailinator.com",
+    "tempmail.com",
+    "guerrillamail.com",
+    "10minutemail.com",
+    "yopmail.com",
+    "trashmail.com",
+    "throwawaymail.com",
+    "sharklasers.com",
+    "getnada.com",
+    "dispostable.com",
+];
 
-    email
-        .rsplit_once('@')
-        .map(|(_, domain)| DISPOSABLE_DOMAINS.contains(&domain))
-        .unwrap_or(false)
+fn is_disposable_email(email: &str) -> bool {
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return false;
+    };
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    let extra = std::env::var("DISPOSABLE_EMAIL_DOMAINS").unwrap_or_default();
+    DISPOSABLE_DOMAINS
+        .iter()
+        .copied()
+        .chain(extra.split(',').map(str::trim).filter(|d| !d.is_empty()))
+        .any(|d| {
+            let d = d.to_ascii_lowercase();
+            domain == d || domain.ends_with(&format!(".{d}"))
+        })
 }
 
 use crate::security::extract_client_ip_cidrs;
@@ -509,15 +531,9 @@ pub async fn newsletter_subscribe(
         }
     };
 
-    if is_disposable_email(&email) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(NewsletterResponse {
-                success: false,
-                message: "Disposable emails are not allowed.".to_string(),
-            }),
-        ));
-    }
+    // Disposable addresses get the same uniform 202 as everyone else (no
+    // enumeration of the blocklist); nothing is stored or sent.
+    let disposable = is_disposable_email(&email);
     let source = payload
         .source
         .unwrap_or_else(|| "direct".to_string())
@@ -545,7 +561,25 @@ pub async fn newsletter_subscribe(
         .map(|s| s.confirmed && s.unsubscribed_at.is_none())
         .unwrap_or(false);
 
-    if !already_active {
+    // Per-recipient cooldown: at most one confirmation email per address per hour,
+    // regardless of how many client IPs are used. Fails open if Redis is down.
+    let throttled = if already_active || disposable {
+        false
+    } else {
+        use sha2::{Digest, Sha256};
+        let key = format!(
+            "newsletter:confirm_cooldown:{}",
+            hex::encode(Sha256::digest(email.as_bytes()))
+        );
+        state
+            .cache
+            .incr_with_ttl(&key, std::time::Duration::from_secs(3600))
+            .await
+            .map(|n| n > 1)
+            .unwrap_or(false)
+    };
+
+    if !already_active && !disposable && !throttled {
         let token = Uuid::new_v4().to_string();
         state
             .db
@@ -1130,7 +1164,9 @@ pub struct InvalidationResult {
 /// Resolve a market by its ID.
 ///
 /// Workflow:
-/// 1. Fetch the current market state from the blockchain.
+/// 1. Fetch the current market state from the blockchain and reject an
+///    `outcome_index` that is out of range or differs from the on-chain
+///    winning outcome.
 /// 2. Persist the resolved outcome to the database.
 /// 3. Invalidate only the cache keys that are directly affected by this market's
 ///    resolution (specific market key, oracle result, statistics aggregates, and
@@ -1164,14 +1200,31 @@ pub async fn resolve_market(
     Path(market_id): Path<i64>,
     Json(payload): Json<ResolveMarketRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 1. Persist the resolution to the database.
+    // 1. Validate the outcome against the on-chain market state.
+    if i32::try_from(payload.outcome_index).is_err() {
+        return Err(ApiError::bad_request("outcome_index out of range"));
+    }
+    let chain = state
+        .blockchain
+        .market_data_cached(market_id)
+        .await
+        .map_err(into_api_error)?;
+    if let Some(onchain) = chain.resolved_outcome {
+        if onchain != payload.outcome_index {
+            return Err(ApiError::bad_request(
+                "outcome_index does not match the on-chain winning outcome",
+            ));
+        }
+    }
+
+    // 2. Persist the resolution to the database.
     state
         .db
         .resolve_market(market_id, payload.outcome_index)
         .await
         .map_err(into_api_error)?;
 
-    // 2. Invalidate only the keys affected by this market's resolution via tag.
+    // 3. Invalidate only the keys affected by this market's resolution via tag.
     // This is best-effort: a cache invalidation failure should not roll back the DB write.
     let tag = InvalidationTag::MarketResolved {
         market_id,
@@ -2087,5 +2140,13 @@ mod tests {
             elapsed <= Duration::from_millis(100),
             "concurrent checks must complete in one delay slot, not two (elapsed={elapsed:?})"
         );
+    }
+
+    #[test]
+    fn disposable_email_matches_registrable_domain() {
+        assert!(is_disposable_email("a@mailinator.com"));
+        assert!(is_disposable_email("a@Sub.YopMail.com"));
+        assert!(!is_disposable_email("a@notmailinator.com"));
+        assert!(!is_disposable_email("a@gmail.com"));
     }
 }
