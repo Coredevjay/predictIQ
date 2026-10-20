@@ -220,6 +220,47 @@ paths:
               schema:
                 $ref: "#/components/schemas/BlockchainHealth"
 
+  /api/v1/blockchain/markets:
+    post:
+      tags: [blockchain]
+      operationId: createMarket
+      summary: Create a prediction market (wallet-signing required — see #77)
+      description: |
+        Registers a new prediction market.
+
+        **Status: 501 Not Implemented**
+
+        The full market-creation flow requires the caller to sign the Stellar
+        transaction with their wallet private key. The API server does not hold
+        user keys, so this step cannot be completed server-side until the
+        wallet-signing integration described in issue #77 is implemented.
+
+        Until then:
+        - The route **exists** and validates the request body (no more 404/405).
+        - A `501 Not Implemented` response is returned with a clear message.
+        - Callers should build and sign the `CreateMarket` contract-invocation
+          transaction directly with the Stellar SDK and submit it via Soroban RPC.
+      parameters:
+        - $ref: "#/components/parameters/apiVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMarketRequest"
+      responses:
+        "400":
+          description: Validation error (missing/invalid fields)
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/ApiError"
+        "501":
+          description: Not yet implemented — use the Stellar SDK for wallet-signed market creation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateMarketResponse"
+
   /api/v1/blockchain/markets/{market_id}:
     get:
       tags: [blockchain]
@@ -988,6 +1029,93 @@ components:
           type: string
         message_id:
           type: string
+
+    OracleConfigRequest:
+      type: object
+      required: [oracle_address, feed_id, max_staleness_seconds, max_confidence_bps]
+      properties:
+        oracle_address:
+          type: string
+          description: Stellar account address of the oracle contract.
+        feed_id:
+          type: string
+          description: Feed identifier used by the oracle (e.g. "BTC/USD").
+        max_staleness_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Maximum age of an accepted oracle reading, in seconds.
+        max_confidence_bps:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Maximum confidence band accepted from the oracle, in basis points.
+
+    CreateMarketRequest:
+      type: object
+      required:
+        - creator
+        - description
+        - options
+        - deadline
+        - resolution_deadline
+        - oracle_config
+        - tier
+        - native_token
+        - parent_id
+        - parent_outcome_idx
+      properties:
+        creator:
+          type: string
+          description: Stellar account address that will be recorded as the market creator.
+        description:
+          type: string
+          description: Human-readable description of the prediction question.
+        options:
+          type: array
+          items:
+            type: string
+          minItems: 2
+          description: Ordered list of outcome labels (minimum 2).
+        deadline:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Unix timestamp (seconds) at which the market stops accepting bets. Must be in the future.
+        resolution_deadline:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Unix timestamp (seconds) after which the oracle may resolve the market. Must be at least `deadline + 86400`.
+        oracle_config:
+          $ref: "#/components/schemas/OracleConfigRequest"
+        tier:
+          type: string
+          enum: [Basic, Pro, Institutional]
+          description: Market tier.
+        native_token:
+          type: string
+          description: Native token contract address used for payouts.
+        parent_id:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Parent market ID for conditional markets (0 = top-level market).
+        parent_outcome_idx:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Outcome index within the parent market that activates this market.
+
+    CreateMarketResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+          description: Human-readable explanation of why the request could not be completed server-side.
 
   responses:
     ApiError:
