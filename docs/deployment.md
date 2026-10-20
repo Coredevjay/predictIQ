@@ -112,8 +112,7 @@ Note the following values — you will need them for environment variable config
 
 | Output | Usage |
 |---|---|
-| `database_url` | `DATABASE_URL` for the API service |
-| `redis_url` | `REDIS_URL` for the API service |
+| `endpoint` (rds/redis modules) | Host components injected into Secrets Manager; the API assembles connection URLs at runtime (no password-bearing URL in state) |
 | `alb_dns_name` | Configure DNS CNAME to this value |
 | `ecs_cluster_name` | Used for ECS deployment commands |
 | `ecs_service_name` | Used for ECS deployment commands |
@@ -218,7 +217,7 @@ The ECS task definition (`infrastructure/terraform/modules/ecs/main.tf`) injects
 | `DB_NAME` | `secrets` | `aws_secretsmanager_secret.db_name` |
 | `DB_USER` | `secrets` | `aws_secretsmanager_secret.db_user` |
 | `DB_PASSWORD` | `secrets` | `aws_secretsmanager_secret.db_password` |
-| `REDIS_URL` | `secrets` | `aws_secretsmanager_secret.redis_url` |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_AUTH_TOKEN` | `secrets` | `aws_secretsmanager_secret.redis_host` / `redis_port` / `redis_auth_token` (API builds `rediss://` URL at runtime) |
 | `HMAC_KEY` | `secrets` | `aws_secretsmanager_secret.hmac_key` |
 | `SENDGRID_API_KEY` | `secrets` | `aws_secretsmanager_secret.sendgrid_api_key` |
 | `SENDGRID_KEY_ROTATED_AT` | `secrets` | `aws_secretsmanager_secret.sendgrid_key_rotated_at` |
@@ -553,3 +552,8 @@ All six checks should pass within 5 minutes of the deployment completing.
 > | Date | Follower | Environment | Issues found | PR |
 > |---|---|---|---|---|
 > | *(not yet validated)* | | | | |
+### Alerting, encryption and RDS settings
+
+- Set `alert_email_endpoints` / `alert_https_endpoints` per environment to subscribe to the alerts SNS topic (email, PagerDuty, Slack webhook). Email subscribers must confirm the subscription.
+- Secrets Manager secrets and the ECS log group are encrypted with a per-environment CMK (key rotation on). Prod log retention is 365 days. Set `secret_rotation_lambda_arn` to enable 30-day rotation of the DB and Redis secrets.
+- RDS uses `engine_version = "15"` with automatic minor upgrades, a stable final snapshot name, Performance Insights and CloudWatch log exports.
