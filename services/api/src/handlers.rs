@@ -1906,57 +1906,48 @@ pub async fn rotate_api_key(
 ) -> Result<impl IntoResponse, ApiError> {
     use sha2::{Digest, Sha256};
 
-    let overlap_days = body.overlap_days.unwrap_or(7).max(1) as i64;
+    let overlap_days = body.overlap_days.unwrap_or(7).clamp(1, 90) as i64;
 
-    // Generate a new cryptographically random key (256-bit hex string).
+    // Generate a new key from 32 bytes of OS randomness (256-bit hex string).
     let new_raw_key = {
-        use std::fmt::Write;
-        let bytes = uuid::Uuid::new_v4().as_bytes().to_vec();
-        let bytes2 = uuid::Uuid::new_v4().as_bytes().to_vec();
-        let combined: Vec<u8> = bytes.into_iter().chain(bytes2).collect();
-        let mut s = String::with_capacity(combined.len() * 2);
-        for b in &combined {
-            write!(s, "{:02x}", b).unwrap();
-        }
-        s
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        hex::encode(bytes)
     };
     let new_hash = hex::encode(Sha256::digest(new_raw_key.as_bytes()));
 
-    // Find any existing active key(s) with the same label and schedule their expiry.
-    let active_keys = state
-        .db
-        .api_key_list_active()
-        .await
-        .map_err(into_api_error)?;
-
-    let mut old_expires_at: Option<chrono::DateTime<chrono::Utc>> = None;
-    let mut old_label: Option<String> = None;
-
     let expires_at = chrono::Utc::now() + chrono::Duration::days(overlap_days);
 
-    for key in &active_keys {
-        if key.label == body.key_label {
-            state
-                .db
-                .api_key_set_expires(&key.key_hash, expires_at)
-                .await
-                .map_err(into_api_error)?;
-            old_expires_at = Some(expires_at);
-            old_label = Some(key.label.clone());
-            tracing::info!(
-                label = %key.label,
-                expires_at = %expires_at,
-                "API key scheduled for expiry (rotation overlap window)"
-            );
-        }
-    }
+    // Expire the old key(s) and insert the new one atomically so a failure
+    // never leaves the old key expiring with no replacement.
+    let mut tx = state.db.pool().begin().await.map_err(|e| into_api_error(e.into()))?;
 
-    // Insert the new key.
-    state
-        .db
-        .api_key_insert(&new_hash, &body.key_label)
+    let expired: Vec<String> = sqlx::query_scalar(
+        "UPDATE api_keys SET expires_at = $1
+         WHERE label = $2 AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > NOW())
+         RETURNING label",
+    )
+    .bind(expires_at)
+    .bind(&body.key_label)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| into_api_error(e.into()))?;
+
+    sqlx::query("INSERT INTO api_keys (key_hash, label) VALUES ($1, $2)")
+        .bind(&new_hash)
+        .bind(&body.key_label)
+        .execute(&mut *tx)
         .await
-        .map_err(into_api_error)?;
+        .map_err(|e| into_api_error(e.into()))?;
+
+    tx.commit().await.map_err(|e| into_api_error(e.into()))?;
+
+    let (old_expires_at, old_label) = match expired.into_iter().next() {
+        Some(label) => (Some(expires_at), Some(label)),
+        None => (None, None),
+    };
 
     tracing::info!(label = %body.key_label, "New API key issued");
 

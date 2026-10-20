@@ -359,6 +359,12 @@ In the deployment pipeline, add a snapshot step **before** the migration step an
     DATABASE_URL: ${{ secrets.DATABASE_URL }}
 ```
 
+### Running migrations from the API image
+
+The API image embeds every migration and exposes a `migrate` subcommand, so migrations can run as a one-off ECS task (`command: ["predictiq-api", "migrate"]`) with no `psql` or SQL files in the runtime image. Run it after the pre-migration snapshot and before rolling out the service.
+
+The container `HEALTHCHECK` runs `predictiq-api healthcheck`, which probes the lightweight `/health/live` endpoint (no `curl` required).
+
 ### Applying migrations
 
 Migrations must be applied **before** deploying a new API version that requires them.
