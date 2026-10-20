@@ -37,19 +37,37 @@ pub fn build_cors_layer(cfg: &CorsConfig) -> CorsLayer {
     let origins: Vec<HeaderValue> = cfg
         .allowed_origins
         .iter()
-        .filter_map(|o| o.parse::<HeaderValue>().ok())
+        .filter_map(|o| match o.parse::<HeaderValue>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(value = %o, "CORS: ignoring unparsable allowed origin");
+                None
+            }
+        })
         .collect();
 
     let methods: Vec<Method> = cfg
         .allowed_methods
         .iter()
-        .filter_map(|m| m.parse::<Method>().ok())
+        .filter_map(|m| match m.parse::<Method>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(value = %m, "CORS: ignoring unparsable allowed method");
+                None
+            }
+        })
         .collect();
 
     let headers: Vec<HeaderName> = cfg
         .allowed_headers
         .iter()
-        .filter_map(|h| h.parse::<HeaderName>().ok())
+        .filter_map(|h| match h.parse::<HeaderName>() {
+            Ok(v) => Some(v),
+            Err(_) => {
+                tracing::warn!(value = %h, "CORS: ignoring unparsable allowed header");
+                None
+            }
+        })
         .collect();
 
     let layer = CorsLayer::new()
@@ -59,6 +77,10 @@ pub fn build_cors_layer(cfg: &CorsConfig) -> CorsLayer {
         .max_age(Duration::from_secs(cfg.max_age_secs));
 
     if cfg.allow_credentials {
+        if cfg.allowed_origins.iter().any(|o| o.trim() == "*") {
+            tracing::warn!("CORS: wildcard origin is not allowed with credentials — credentials disabled");
+            return layer;
+        }
         layer.allow_credentials(true)
     } else {
         layer

@@ -233,11 +233,13 @@ async fn main() -> anyhow::Result<()> {
     // ── Email queue worker (monitored restart loop) ────────────────────────────
     // Wraps the worker in a panic-catching JoinHandle. If the task panics or
     // exits unexpectedly it is restarted with exponential backoff (1s, 2s, 4s,
-    // 8s, 16s). After MAX_EMAIL_WORKER_RESTARTS consecutive crashes without a
+    // 8s, 16s). The counter resets once a worker has run healthily for
+    // EMAIL_WORKER_HEALTHY_RESET. After MAX_EMAIL_WORKER_RESTARTS consecutive crashes without a
     // clean recovery the loop logs FATAL and increments worker_crash_total so
     // the Prometheus alert fires.
     {
         const MAX_EMAIL_WORKER_RESTARTS: u32 = 5;
+        const EMAIL_WORKER_HEALTHY_RESET: Duration = Duration::from_secs(300);
 
         let queue_worker = email_queue.clone();
         let service_worker = email_service.clone();
@@ -250,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             let mut restarts: u32 = 0;
             loop {
+                let started = std::time::Instant::now();
                 let q = queue_worker.clone();
                 let s = service_worker.clone();
                 let token = email_token.clone();
@@ -267,6 +270,10 @@ async fn main() -> anyhow::Result<()> {
                         break;
                     }
                     Err(e) => {
+                        // A worker that stayed healthy for a while is not part of a crash loop.
+                        if started.elapsed() >= EMAIL_WORKER_HEALTHY_RESET {
+                            restarts = 0;
+                        }
                         restarts += 1;
                         crash_counter.with_label_values(&["email_queue_worker"]).inc();
 
@@ -361,7 +368,6 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn_with_state(state.clone(), idempotency::idempotency_middleware))
         .layer(middleware::from_fn(validation::content_type_validation_middleware))
-        .layer(middleware::from_fn(validation::request_size_validation_middleware))
         // CSRF defense-in-depth: validate Origin/Referer on state-changing requests.
         .layer(middleware::from_fn_with_state(csrf_config, csrf_protection_middleware))
         .layer(middleware::from_fn_with_state(
@@ -390,7 +396,6 @@ async fn main() -> anyhow::Result<()> {
     // - audit_logging_middleware: webhook events are tracked via email_events  │
     let webhook_routes = Router::new()
         .route("/webhooks/sendgrid", post(handlers::sendgrid_webhook))
-        .layer(middleware::from_fn(validation::request_size_validation_middleware))
         .layer(middleware::from_fn(security::security_headers_middleware))
         .layer(middleware::from_fn_with_state(
             (
@@ -461,7 +466,6 @@ async fn main() -> anyhow::Result<()> {
             idempotency::idempotency_middleware,
         ))
         .layer(middleware::from_fn(validation::content_type_validation_middleware))
-        .layer(middleware::from_fn(validation::request_size_validation_middleware))
         .layer(middleware::from_fn_with_state(
             (ip_whitelist.clone(), security::TrustProxy(config_trust_proxy)),
             security::ip_whitelist_middleware,
@@ -503,43 +507,32 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind_addr).await?;
     tracing::info!("API listening on {bind_addr}");
 
-    // Axum's built-in graceful shutdown drains in-flight HTTP requests.
-    // After the server stops accepting connections we then drain background workers.
-    let axum_shutdown = {
-        let coord = coordinator.clone();
-        let email_coord = email_coordinator.clone();
-        async move {
+    // Stop accepting connections and drain in-flight requests first; only then
+    // drain background workers so no request can enqueue into a stopped worker.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
             wait_for_signal().await;
             tracing::info!("Shutdown signal received — stopping HTTP server");
-
-            // Drain email queue first with its own timeout to avoid losing in-flight emails.
-            let email_drain = shutdown::email_queue_drain_timeout();
-            tracing::info!(
-                timeout_secs = email_drain.as_secs(),
-                "Draining email queue worker"
-            );
-            match email_coord.shutdown(email_drain).await {
-                Ok(_) => tracing::info!("Email queue worker drained cleanly"),
-                Err(e) => tracing::warn!("Email queue drain timeout — in-flight email may be lost: {e}"),
-            }
-
-            // Then drain remaining background workers (blockchain sync, tx-monitor).
-            let timeout_dur = shutdown_timeout();
-            tracing::info!(
-                timeout_secs = timeout_dur.as_secs(),
-                "Waiting for remaining background workers to drain"
-            );
-            match coord.shutdown(timeout_dur).await {
-                Ok(_) => tracing::info!("All background workers stopped cleanly"),
-                Err(e) => tracing::warn!("Shutdown timeout — forcing exit: {e}"),
-            }
-            tracing_config::shutdown_tracing();
-        }
-    };
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(axum_shutdown)
+        })
         .await?;
+
+    let email_drain = shutdown::email_queue_drain_timeout();
+    tracing::info!(timeout_secs = email_drain.as_secs(), "Draining email queue worker");
+    match email_coordinator.shutdown(email_drain).await {
+        Ok(_) => tracing::info!("Email queue worker drained cleanly"),
+        Err(e) => tracing::warn!("Email queue drain timeout — in-flight email may be lost: {e}"),
+    }
+
+    let timeout_dur = shutdown_timeout();
+    tracing::info!(
+        timeout_secs = timeout_dur.as_secs(),
+        "Waiting for remaining background workers to drain"
+    );
+    match coordinator.shutdown(timeout_dur).await {
+        Ok(_) => tracing::info!("All background workers stopped cleanly"),
+        Err(e) => tracing::warn!("Shutdown timeout — forcing exit: {e}"),
+    }
+    tracing_config::shutdown_tracing();
 
     Ok(())
 }
