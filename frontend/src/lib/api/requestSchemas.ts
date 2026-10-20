@@ -78,6 +78,33 @@ export const placeBetSchema = z
   })
   .loose();
 
+/**
+ * POST /api/v1/blockchain/markets — create a new prediction market.
+ * Full wallet-signing flow is tracked under #77; this schema validates
+ * the API request body that will be sent once signing is wired.
+ */
+export const createMarketSchema = z
+  .object({
+    creator: z.string().min(1, 'A creator wallet address is required.'),
+    description: z.string().min(1, 'A description is required.'),
+    options: z.array(z.string().min(1)).min(2, 'At least 2 options are required.'),
+    deadline: z.number().int().positive('Deadline must be a positive unix timestamp.'),
+    resolution_deadline: z.number().int().positive('Resolution deadline must be a positive unix timestamp.'),
+    oracle_config: z.object({
+      oracle_address: z.string().min(1, 'Oracle address is required.'),
+      feed_id: z.string().min(1, 'Feed ID is required.'),
+      max_staleness_seconds: z.number().int().nonnegative(),
+      max_confidence_bps: z.number().int().nonnegative(),
+    }).loose(),
+    tier: z.enum(['Basic', 'Pro', 'Institutional']),
+    native_token: z.string().min(1, 'Native token address is required.'),
+    parent_id: z.number().int().nonnegative(),
+    parent_outcome_idx: z.number().int().nonnegative(),
+  })
+  .loose();
+
+export type CreateMarketBody = z.infer<typeof createMarketSchema>;
+
 // === Compile-time contract: each schema stays assignable to its generated type
 
 // The generated types carry `email` as a plain `string` (the `format: email`

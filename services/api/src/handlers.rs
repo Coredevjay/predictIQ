@@ -1214,6 +1214,174 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Result<impl IntoResp
     ))
 }
 
+// ── Blockchain market creation (issue #1753) ──────────────────────────────────
+
+/// Oracle configuration nested inside a market creation request.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+pub struct OracleConfigRequest {
+    /// Stellar account address of the oracle contract.
+    pub oracle_address: String,
+    /// Feed identifier used by the oracle (e.g. "BTC/USD").
+    pub feed_id: String,
+    /// Maximum age of an accepted oracle reading, in seconds.
+    pub max_staleness_seconds: u64,
+    /// Maximum confidence band accepted from the oracle, in basis points.
+    pub max_confidence_bps: u64,
+}
+
+/// Request body for `POST /api/v1/blockchain/markets`.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+pub struct CreateMarketRequest {
+    /// Stellar account address that will be recorded as the market creator.
+    pub creator: String,
+    /// Human-readable description of the prediction question.
+    pub description: String,
+    /// Ordered list of outcome labels (minimum 2).
+    pub options: Vec<String>,
+    /// Unix timestamp (seconds) at which the market stops accepting bets.
+    /// Must be in the future at the time of the request.
+    pub deadline: u64,
+    /// Unix timestamp (seconds) after which the oracle may resolve the market.
+    /// Must be at least `deadline + 86400` (24 h after betting closes).
+    pub resolution_deadline: u64,
+    /// Oracle configuration for automated resolution.
+    pub oracle_config: OracleConfigRequest,
+    /// Market tier: `"Basic"`, `"Pro"`, or `"Institutional"`.
+    pub tier: String,
+    /// Native token contract address used for payouts.
+    pub native_token: String,
+    /// Parent market ID for conditional markets (0 = top-level market).
+    pub parent_id: u64,
+    /// Outcome index within the parent market that activates this market.
+    pub parent_outcome_idx: u32,
+}
+
+/// Response body returned by `POST /api/v1/blockchain/markets`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct CreateMarketResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Create a new prediction market.
+///
+/// **Status: 501 Not Implemented**
+///
+/// The full market-creation flow requires wallet signing of the Stellar
+/// transaction on the client side, which has not yet been wired into the
+/// API server (tracked in issue #77).  This endpoint is registered so that
+/// clients receive a clear, actionable error instead of a 404 or 405.
+///
+/// Until #77 is resolved, callers should build and sign the `CreateMarket`
+/// contract-invocation transaction directly with the Stellar SDK and submit
+/// it via the Stellar Horizon or Soroban RPC endpoint.
+#[utoipa::path(
+    post,
+    path = "/api/v1/blockchain/markets",
+    tag = "blockchain",
+    request_body = CreateMarketRequest,
+    responses(
+        (status = 400, description = "Validation error", body = ApiError),
+        (status = 501, description = "Not yet implemented — use Stellar SDK for wallet-signed market creation", body = CreateMarketResponse),
+    )
+)]
+pub async fn create_market(
+    Json(payload): Json<CreateMarketRequest>,
+) -> impl IntoResponse {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // ── Validation ────────────────────────────────────────────────────────────
+
+    if payload.creator.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`creator` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.description.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`description` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.options.len() < 2 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`options` must contain at least 2 entries")),
+        )
+            .into_response();
+    }
+
+    if payload.oracle_config.oracle_address.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`oracle_config.oracle_address` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.oracle_config.feed_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`oracle_config.feed_id` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.native_token.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`native_token` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.deadline <= now_secs {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`deadline` must be in the future")),
+        )
+            .into_response();
+    }
+
+    if payload.resolution_deadline < payload.deadline + 86_400 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request(
+                "`resolution_deadline` must be at least `deadline + 86400` (24 h after betting closes)",
+            )),
+        )
+            .into_response();
+    }
+
+    // ── Not yet implemented ───────────────────────────────────────────────────
+    // Full market creation requires the caller to sign the Stellar transaction
+    // with their private key.  The API server does not hold user private keys,
+    // so this path cannot be completed server-side until the wallet-signing
+    // integration tracked in issue #77 is implemented.
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(CreateMarketResponse {
+            success: false,
+            message: "Market creation via API is not yet implemented. \
+                Direct contract invocation requires wallet signing, which must be \
+                performed client-side using the Stellar SDK. \
+                See issue #77 for the planned implementation."
+                .to_string(),
+        }),
+    )
+        .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/api/v1/blockchain/health",

@@ -12,11 +12,17 @@
 | GET | `/api/v1/markets/featured` | `getFeaturedMarkets` | None |
 | GET | `/api/v1/content` | `getContent` | None |
 | GET | `/api/v1/blockchain/health` | `getBlockchainHealth` | None |
+| POST | `/api/v1/blockchain/markets` | `createMarket` | None |
 | GET | `/api/v1/blockchain/markets/{market_id}` | `getBlockchainMarket` | None |
 | GET | `/api/v1/blockchain/stats` | `getBlockchainStats` | None |
 | GET | `/api/v1/blockchain/users/{user}/bets` | `getUserBets` | None |
 | GET | `/api/v1/blockchain/oracle/{market_id}` | `getOracleResult` | None |
 | GET | `/api/v1/blockchain/tx/{tx_hash}` | `getTransactionStatus` | None |
+
+> **Note:** `POST /api/v1/blockchain/markets` currently returns `501 Not Implemented`.
+> The full create flow requires client-side wallet signing (tracked in issue #77).
+> The route is registered and validates the request body; use the Stellar SDK to
+> sign and submit `CreateMarket` transactions directly until #77 is resolved.
 
 ## Newsletter Routes
 
