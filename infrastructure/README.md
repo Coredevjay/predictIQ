@@ -149,6 +149,8 @@ See `environments/README.md` for detailed environment management instructions.
 - Configurable CIDR blocks
 - Public and private subnets
 - NAT Gateway for private subnet egress
+- Gateway endpoint (S3) and interface endpoints (ECR api/dkr, CloudWatch Logs, Secrets Manager) so AWS service traffic bypasses NAT
+- VPC flow logs (all traffic) to CloudWatch Logs
 
 ### RDS Module
 - PostgreSQL database
@@ -163,10 +165,13 @@ See `environments/README.md` for detailed environment management instructions.
 - **Failover RTO**: AWS promotes a read replica to primary in approximately **60–120 seconds**. During this window, write operations will fail; read-only operations served by replicas remain available. Applications should implement retry logic with exponential backoff (recommended: 3 retries, starting at 200 ms) to handle the failover window gracefully.
 - At-rest and in-transit encryption enabled
 - Subnet group for VPC placement
+- Daily snapshots (`snapshot_retention_limit` = 7 days, window 01:00-02:00 UTC) and `auto_minor_version_upgrade`
+- Parameter group family is derived from `redis_engine_version` (e.g. `7.0` -> `default.redis7`, `6.2` -> `default.redis6.x`)
 
 ### ECS Module
 - Fargate launch type
-- Application Load Balancer
+- Application Load Balancer with access logs (encrypted S3 bucket), `drop_invalid_header_fields`, deletion protection in prod, and an AWS managed-rules WAF (Common + Known Bad Inputs)
+- Container health check on `/health/live` (15 s interval, 2 retries); target group probes every 15 s with `unhealthy_threshold = 2`; `stopTimeout` and `deregistration_delay` follow `shutdown_timeout_seconds` (default 30, matching `SHUTDOWN_TIMEOUT_SECS`)
 - Auto-scaling policies
 - CloudWatch logging
 

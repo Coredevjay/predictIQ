@@ -53,6 +53,14 @@ jobs:
         if: steps.fmt.outcome == 'failure'
         run: exit 1
 
+  terraform-hardening:
+    name: Terraform Hardening Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_terraform_hardening.py
+
   terraform-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
@@ -203,7 +211,7 @@ jobs:
 
   all-terraform-checks-passed:
     name: All Terraform Checks Passed
-    needs: [terraform-fmt, terraform-validate, terraform-plan]
+    needs: [terraform-fmt, terraform-hardening, terraform-validate, terraform-plan]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

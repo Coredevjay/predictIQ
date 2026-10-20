@@ -35,12 +35,22 @@ variable "redis_multi_az_enabled" {
   description = "Enable Multi-AZ automatic failover for the Redis replication group."
 }
 
+variable "snapshot_retention_limit" {
+  type        = number
+  default     = 7
+  description = "Days to retain automatic Redis snapshots (0 disables backups)."
+}
+
 variable "ecs_tasks_sg_id" {
   type        = string
   description = "Security group ID of the ECS tasks that are allowed to connect"
 }
 
 locals {
+  # e.g. "7.0" -> "redis7", "6.2" -> "redis6.x"
+  redis_major            = tonumber(split(".", var.engine_version)[0])
+  parameter_group_family = local.redis_major >= 7 ? "redis${local.redis_major}" : "redis${local.redis_major}.x"
+
   common_tags = {
     Project     = "predictiq"
     Environment = var.environment
@@ -89,7 +99,7 @@ resource "aws_elasticache_replication_group" "main" {
   engine_version       = var.engine_version
   node_type            = var.node_type
   num_cache_clusters   = var.num_cache_clusters >= 2 ? var.num_cache_clusters : 2
-  parameter_group_name = "default.redis7"
+  parameter_group_name = "default.${local.parameter_group_family}"
   port                 = 6379
 
   subnet_group_name  = aws_elasticache_subnet_group.main.name
@@ -102,7 +112,10 @@ resource "aws_elasticache_replication_group" "main" {
   transit_encryption_enabled = true
   auth_token                 = var.redis_auth_token
 
-  maintenance_window = "mon:03:00-mon:04:00"
+  maintenance_window         = "mon:03:00-mon:04:00"
+  snapshot_window            = "01:00-02:00"
+  snapshot_retention_limit   = var.snapshot_retention_limit
+  auto_minor_version_upgrade = true
 
   tags = merge(
     local.common_tags,
