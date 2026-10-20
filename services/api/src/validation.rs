@@ -29,9 +29,16 @@ pub fn parse_request_body_max_bytes(val: Option<&str>) -> usize {
         .unwrap_or(DEFAULT_REQUEST_BODY_MAX_BYTES)
 }
 
+/// Read once at first use and cached for the process lifetime.
 fn body_limit() -> usize {
-    parse_request_body_max_bytes(std::env::var("REQUEST_BODY_MAX_BYTES").ok().as_deref())
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        parse_request_body_max_bytes(std::env::var("REQUEST_BODY_MAX_BYTES").ok().as_deref())
+    })
 }
+
+/// Maximum time allowed to read a request body.
+const BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Serialize)]
 struct PayloadTooLargeError {
@@ -64,9 +71,10 @@ pub async fn request_size_validation_middleware(
     // Slow path: buffer stream up to limit+1 bytes.
     // axum::body::to_bytes returns Err when body exceeds the cap — treat that as 413.
     let (parts, body) = req.into_parts();
-    let bytes = match axum::body::to_bytes(body, limit + 1).await {
-        Ok(b) => b,
-        Err(_) => return payload_too_large(limit),
+    let bytes = match tokio::time::timeout(BODY_READ_TIMEOUT, axum::body::to_bytes(body, limit + 1)).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(_)) => return payload_too_large(limit),
+        Err(_) => return StatusCode::REQUEST_TIMEOUT.into_response(),
     };
     if bytes.len() > limit {
         return payload_too_large(limit);

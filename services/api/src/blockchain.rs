@@ -275,6 +275,9 @@ pub struct ReplayRequest {
 pub struct ReplayProgress {
     pub from_ledger: u32,
     pub events_replayed: usize,
+    /// Highest ledger of any stored event (or `from_ledger` if none were stored).
+    #[serde(default)]
+    pub last_ledger: u32,
     pub completed: bool,
 }
 
@@ -1353,18 +1356,26 @@ impl BlockchainClient {
     pub async fn watch_transaction(&self, hash: &str) -> Result<(), WatchTxError> {
         let mut set = self.monitor.watched_txs.write().await;
 
-        // Evict TTL-expired entries first.
         let now = Instant::now();
-        let before = set.len();
-        set.retain(|_, inserted_at| now.duration_since(*inserted_at) < self.watched_tx_ttl);
-        let evicted = before - set.len();
-        if evicted > 0 {
-            self.metrics.observe_tx_eviction(evicted as u64);
-            tracing::info!(evicted, "watched_txs: TTL eviction");
+
+        // Evict TTL-expired entries only when the map is full, avoiding an
+        // O(n) scan under the write lock on every registration.
+        if set.len() >= self.watched_tx_max_size {
+            let before = set.len();
+            set.retain(|_, inserted_at| now.duration_since(*inserted_at) < self.watched_tx_ttl);
+            let evicted = before - set.len();
+            if evicted > 0 {
+                self.metrics.observe_tx_eviction(evicted as u64);
+                tracing::info!(evicted, "watched_txs: TTL eviction");
+            }
         }
 
-        // Deduplication check: reject if the hash is already being watched.
-        if set.contains_key(hash) {
+        // Deduplication check: reject if the hash is already being watched
+        // and has not expired.
+        if set
+            .get(hash)
+            .is_some_and(|t| now.duration_since(*t) < self.watched_tx_ttl)
+        {
             tracing::debug!(hash, "watch_transaction: hash already registered (dedup)");
             self.metrics.set_watched_tx_count(set.len() as i64);
             return Err(WatchTxError::AlreadyWatched);
@@ -1389,13 +1400,24 @@ impl BlockchainClient {
         let expires_at = Utc::now()
             + chrono::Duration::from_std(WATCHED_TX_TTL)
                 .unwrap_or(chrono::Duration::minutes(30));
-        let db = self.db.clone();
-        let hash_owned = hash.to_string();
-        tokio::spawn(async move {
-            if let Err(e) = db.watched_tx_upsert(&hash_owned, None, expires_at).await {
-                tracing::warn!(tx_hash = %hash_owned, error = %e, "failed to persist watched tx to database");
+        // Bound concurrent persistence tasks; the in-memory watch is still
+        // registered if the persistence budget is exhausted.
+        static PERSIST_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+        match PERSIST_PERMITS.try_acquire() {
+            Ok(permit) => {
+                let db = self.db.clone();
+                let hash_owned = hash.to_string();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    if let Err(e) = db.watched_tx_upsert(&hash_owned, None, expires_at).await {
+                        tracing::warn!(tx_hash = %hash_owned, error = %e, "failed to persist watched tx to database");
+                    }
+                });
             }
-        });
+            Err(_) => {
+                tracing::warn!(tx_hash = %hash, "watched tx persistence skipped: too many pending writes");
+            }
+        }
 
         Ok(())
     }
@@ -1421,13 +1443,18 @@ impl BlockchainClient {
 
         let events = self.fetch_events_since(from_ledger).await
             .map_err(BlockchainError::from_anyhow)?;
-        let events_replayed = events.len();
+        let mut events_replayed = 0usize;
+        let mut last_ledger = from_ledger;
+        let mut skipped_beyond_tip = false;
 
         for event in events {
             // Only store events up to the confirmed tip (idempotent by key)
             if event.ledger > confirmed_tip {
+                skipped_beyond_tip = true;
                 continue;
             }
+            events_replayed += 1;
+            last_ledger = last_ledger.max(event.ledger);
             let event_key = format!("{}:event:{}", keys::CHAIN_PREFIX, event.id);
             self.cache
                 .set_json(&event_key, &event, Duration::from_secs(30 * 60))
@@ -1438,13 +1465,17 @@ impl BlockchainClient {
         let progress = ReplayProgress {
             from_ledger,
             events_replayed,
-            completed: true,
+            last_ledger,
+            completed: !skipped_beyond_tip,
         };
 
-        self.cache
-            .set_json(&progress_key, &progress, Duration::from_secs(60 * 60))
-            .await
-            .map_err(|e| BlockchainError::Internal(e.to_string()))?;
+        // Only cache a completed replay; an incomplete one must be re-runnable.
+        if progress.completed {
+            self.cache
+                .set_json(&progress_key, &progress, Duration::from_secs(60 * 60))
+                .await
+                .map_err(|e| BlockchainError::Internal(e.to_string()))?;
+        }
 
         tracing::info!(from_ledger, events_replayed, "event replay completed");
         Ok(progress)

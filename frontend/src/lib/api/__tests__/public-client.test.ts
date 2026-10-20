@@ -39,6 +39,10 @@ describe('Module boundary: public-client must not expose admin surface (#1158)',
       expect((publicClientModule.api as Record<string, unknown>)['resolveMarket']).toBeUndefined();
     });
 
+    it('does NOT include cancelMarket on the public api object', () => {
+      expect((publicClientModule.api as Record<string, unknown>)['cancelMarket']).toBeUndefined();
+    });
+
     it('does NOT include emailPreview on the public api object', () => {
       expect((publicClientModule.api as Record<string, unknown>)['emailPreview']).toBeUndefined();
     });
@@ -90,6 +94,10 @@ describe('Module boundary: public-client must not expose admin surface (#1158)',
 
     it('includes resolveMarket on the admin api object', () => {
       expect(typeof adminClientModule.api.resolveMarket).toBe('function');
+    });
+
+    it('includes cancelMarket on the admin api object', () => {
+      expect(typeof adminClientModule.api.cancelMarket).toBe('function');
     });
 
     it('includes emailPreview on the admin api object', () => {

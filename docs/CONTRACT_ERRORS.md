@@ -88,6 +88,10 @@ The table below maps each code to its variant name and a human-readable descript
 | 162 | `AlreadyVotedOnRemoval` | The caller has already voted on this guardian removal proposal. |
 | 163 | `RemovalNotPending` | No guardian removal proposal is pending for the given identifier. |
 | 164 | `RemovalExpired` | The guardian removal proposal has expired and can no longer be voted on. |
+| 203 | `DescriptionTooLong` | Market description exceeds 1024 bytes. |
+| 204 | `InvalidOptionLength` | An outcome label is empty or exceeds 128 bytes. |
+| 205 | `TokenNotAllowed` | Settlement token is not on the admin allowlist (enforced once the allowlist is non-empty). |
+| 206 | `InvalidOracleConfig` | Oracle config failed validation at market creation (bad feed id, zero staleness, confidence > 10000 bps, or self as oracle). |
 
 ## Error Groups
 

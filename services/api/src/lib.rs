@@ -8,6 +8,8 @@ pub mod cors;
 pub mod csrf;
 #[cfg(test)]
 mod resolve_market_tests;
+#[cfg(test)]
+mod cancel_market_tests;
 pub mod blockchain;
 pub mod cache;
 pub mod compression;

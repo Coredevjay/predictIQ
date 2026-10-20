@@ -139,6 +139,17 @@ Admin / Contract event
 | **Deletion** | Not possible for on-chain data. PostgreSQL mirror rows are not deleted |
 | **Who has access** | Public on-chain (permissionless read of Stellar ledger); API via Stellar RPC (`GET /api/v1/blockchain/user-bets/:address`); DB admin |
 
+**Client-side contract writes (dispute, claim).** Not every on-chain write has
+an API route. `file_dispute`, `cast_vote`, and `claim_winnings` are invoked
+directly from the browser: the page builds the invocation with
+`frontend/src/lib/wallet/soroban.ts`, the connected wallet signs the XDR, and
+the signed transaction is submitted to Soroban RPC. Contract id and RPC
+endpoint come from `NEXT_PUBLIC_CONTRACT_ID` / `NEXT_PUBLIC_SOROBAN_RPC_URL`;
+when either is unset the pages render a "not configured" message instead of
+failing. Reads for those pages still go through the API
+(`GET /api/v1/blockchain/market/:id`, `GET /api/v1/blockchain/users/:user/bets`)
+— there is deliberately no `/disputes` or per-bet HTTP route.
+
 ---
 
 ### 6. Email Tracking & Delivery Events

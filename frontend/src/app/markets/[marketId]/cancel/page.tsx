@@ -1,15 +1,14 @@
 'use client';
 
 import { use, useEffect, useState } from 'react';
-import { api } from '@/lib/api/public-client';
-import { getEnvConfig } from '@/lib/env';
+import { api, ApiError, getContractErrorMessage } from '@/lib/api/admin-client';
 import { useWalletAddress } from '@/lib/hooks/useWalletAddress';
 import { canCancelMarket, parseMarketView, type MarketView } from '@/lib/markets/marketState';
 import { Modal } from '@/components/Modal';
 import './cancel.css';
 
 /**
- * Market cancellation flow (#1376).
+ * Market cancellation flow (#1376, #1754).
  *
  * `contracts/predict-iq/src/test_cancellation.rs` defines when cancellation
  * is contractually valid: only the creator/admin, only while `Active`, never
@@ -17,34 +16,12 @@ import './cancel.css';
  * (`lib/markets/marketState.ts::canCancelMarket`) so the cancel action is
  * disabled/hidden instead of failing after a wallet has already signed.
  *
- * There is no `POST /api/v1/markets/{id}/cancel` route in
- * `services/api/openapi.yaml` yet (only `.../resolve` exists today), so the
- * submit call below is a plain `fetch` rather than a `lib/api/*-client.ts`
- * method — see the same note on `DepositTierBadge.tsx`. Swap it for the
- * typed client once that endpoint is generated into `schema.d.ts`.
+ * `POST /api/v1/markets/{market_id}/cancel` is defined in
+ * `services/api/openapi.yaml` and typed as `api.cancelMarket` in
+ * `lib/api/admin-client.ts`.
  */
 
 type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
-
-async function cancelMarket(marketId: string, signal: AbortSignal): Promise<void> {
-  const base = getEnvConfig().NEXT_PUBLIC_API_URL.replace(/\/$/, '');
-  const res = await fetch(`${base}/api/v1/markets/${encodeURIComponent(marketId)}/cancel`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-  });
-
-  if (!res.ok) {
-    let message = `Failed to cancel market (HTTP ${res.status})`;
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body.message) message = body.message;
-    } catch {
-      // no JSON body — keep the generic message
-    }
-    throw new Error(message);
-  }
-}
 
 export default function CancelMarketPage({ params }: { params: Promise<{ marketId: string }> }) {
   const { marketId } = use(params);
@@ -83,12 +60,16 @@ export default function CancelMarketPage({ params }: { params: Promise<{ marketI
     setSubmitState('submitting');
     setSubmitError(null);
     try {
-      await cancelMarket(marketId, new AbortController().signal);
+      await api.cancelMarket(marketId);
       setSubmitState('success');
       setConfirmOpen(false);
     } catch (err) {
       setSubmitState('error');
-      setSubmitError(err instanceof Error ? err.message : 'Failed to cancel market.');
+      if (err instanceof ApiError && err.code === 'CONTRACT_ERROR' && typeof err.details?.['contract_code'] === 'number') {
+        setSubmitError(getContractErrorMessage(err.details['contract_code'] as number));
+      } else {
+        setSubmitError(err instanceof Error ? err.message : 'Failed to cancel market.');
+      }
     }
   };
 
