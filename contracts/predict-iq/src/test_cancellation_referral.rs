@@ -68,7 +68,7 @@ impl TestCtx {
         );
         let oracle_config = crate::types::OracleConfig {
             oracle_address: Address::generate(&self.env),
-            feed_id: String::from_str(&self.env, "test"),
+            feed_id: String::from_str(&self.env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,

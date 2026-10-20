@@ -246,3 +246,15 @@ variable "api_signing_key" {
     condition     = length(var.api_signing_key) >= 32
     error_message = "API signing key must be at least 32 characters."
 
+
+variable "alert_email_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "Email addresses subscribed to the alerts SNS topic."
+}
+
+variable "alert_https_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "HTTPS endpoints (PagerDuty/Slack) subscribed to the alerts SNS topic."
+}

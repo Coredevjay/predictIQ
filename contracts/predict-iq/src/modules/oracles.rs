@@ -1,5 +1,5 @@
 use crate::errors::ErrorCode;
-use crate::types::OracleConfig;
+use crate::types::{MarketStatus, OracleConfig};
 use soroban_sdk::{contracttype, symbol_short, Bytes, Env, Map};
 
 pub const MAX_STALENESS: u64 = 60;
@@ -204,6 +204,21 @@ pub fn set_oracle_result(
     oracle_id: u32,
     outcome: u32,
 ) -> Result<(), ErrorCode> {
+    let market =
+        crate::modules::markets::get_market(e, market_id).ok_or(ErrorCode::MarketNotFound)?;
+    if !matches!(
+        market.status,
+        MarketStatus::Active | MarketStatus::PendingResolution
+    ) {
+        return Err(ErrorCode::MarketNotActive);
+    }
+    if outcome >= market.options.len() {
+        return Err(ErrorCode::InvalidOutcome);
+    }
+    if oracle_id >= market.oracle_config.min_responses.unwrap_or(1) {
+        return Err(ErrorCode::OracleFailure);
+    }
+
     e.storage()
         .persistent()
         .set(&OracleData::Result(market_id, oracle_id), &outcome);
@@ -213,9 +228,7 @@ pub fn set_oracle_result(
     );
     record_oracle_response(e, market_id, oracle_id, outcome)?;
 
-    let oracle_addr = crate::modules::markets::get_market(e, market_id)
-        .map(|m| m.oracle_config.oracle_address)
-        .unwrap_or_else(|| e.current_contract_address());
+    let oracle_addr = market.oracle_config.oracle_address;
     crate::modules::events::emit_oracle_result_set(e, market_id, oracle_id, oracle_addr, outcome);
 
     Ok(())
@@ -340,9 +353,26 @@ pub fn validate_consensus(
     }
 
     let winning_outcome = consensus_outcome.ok_or(ErrorCode::OracleFailure)?;
-    }
 
     Ok(winning_outcome)
+}
+
+/// Permissionless: fetch the Pyth price for an Active market past its
+/// resolution deadline and store it as oracle 0's result.
+pub fn resolve_via_oracle(e: &Env, market_id: u64) -> Result<u32, ErrorCode> {
+    let market =
+        crate::modules::markets::get_market(e, market_id).ok_or(ErrorCode::MarketNotFound)?;
+    if market.status != MarketStatus::Active {
+        return Err(ErrorCode::MarketNotActive);
+    }
+    if e.ledger().timestamp() < market.resolution_deadline {
+        return Err(ErrorCode::ResolutionNotReady);
+    }
+    let outcome = resolve_with_pyth(e, market_id, 0, &market.oracle_config)?;
+    if outcome >= market.options.len() {
+        return Err(ErrorCode::InvalidOutcome);
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]

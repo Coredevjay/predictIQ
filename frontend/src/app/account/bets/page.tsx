@@ -1,38 +1,8 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { useWallet } from '../../../lib/wallet/WalletProvider';
 import './bets.css';
-
-// TODO: replace with the shared wallet hook from #77 once merged. This local
-// stub exposes the same shape (connected address + change subscription) so
-// swapping it out later is a one-line change.
-function useConnectedWallet(): string | null {
-  const [address, setAddress] = useState<string | null>(null);
-
-  useEffect(() => {
-    const wallet = (typeof window !== 'undefined' ? (window as any).freighterApi : null);
-    let cancelled = false;
-
-    const loadAddress = async () => {
-      try {
-        const result = await wallet?.getAddress?.();
-        if (!cancelled) setAddress(result?.address ?? null);
-      } catch {
-        if (!cancelled) setAddress(null);
-      }
-    };
-
-    loadAddress();
-    wallet?.addEventListener?.('accountChanged', loadAddress);
-
-    return () => {
-      cancelled = true;
-      wallet?.removeEventListener?.('accountChanged', loadAddress);
-    };
-  }, []);
-
-  return address;
-}
 
 interface Bet {
   id: string;
@@ -47,7 +17,7 @@ const PAGE_SIZE = 20;
 const BET_NOT_FOUND_CODE = 142;
 
 export default function BetHistoryPage() {
-  const address = useConnectedWallet();
+  const { address } = useWallet();
   const [bets, setBets] = useState<Bet[]>([]);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);

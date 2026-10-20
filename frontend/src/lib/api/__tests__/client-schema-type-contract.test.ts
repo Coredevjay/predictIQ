@@ -38,6 +38,7 @@ type _UserBets = AssertPath<'/api/v1/blockchain/users/{user}/bets'>;
 type _OracleResult = AssertPath<'/api/v1/blockchain/oracle/{market_id}'>;
 type _TransactionStatus = AssertPath<'/api/v1/blockchain/tx/{tx_hash}'>;
 type _ResolveMarket = AssertPath<'/api/v1/markets/{market_id}/resolve'>;
+type _CancelMarket = AssertPath<'/api/v1/markets/{market_id}/cancel'>;
 
 // Deliberately-wrong path proving the check has teeth. Uncommenting this
 // line fails `tsc --noEmit` with:

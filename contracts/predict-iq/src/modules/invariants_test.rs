@@ -57,7 +57,7 @@ fn test_stake_conservation_after_market_creation() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -100,7 +100,7 @@ fn test_stake_conservation_single_bet() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -147,7 +147,7 @@ fn test_stake_conservation_multiple_bets_same_outcome() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -198,7 +198,7 @@ fn test_stake_conservation_multiple_bets_different_outcomes() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -253,7 +253,7 @@ fn test_stake_conservation_cancellation_refunds() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -313,7 +313,7 @@ fn test_stake_conservation_partial_refunds() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -371,7 +371,7 @@ fn test_stake_conservation_multiple_cancellations() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -437,7 +437,7 @@ fn test_stake_conservation_resolution_winner_payouts() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -492,7 +492,7 @@ fn test_stake_conservation_resolution_multiple_winners() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -556,7 +556,7 @@ fn test_stake_conservation_three_outcome_market() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -612,7 +612,7 @@ fn test_stake_conservation_boundary_values() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -675,7 +675,7 @@ fn test_stake_conservation_valid_bet_maintains_conservation() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -722,7 +722,7 @@ fn test_stake_conservation_multiple_outcome_refunds() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -801,7 +801,7 @@ fn test_resolve_to_zero_stake_outcome_rejected_or_cancelled() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -875,7 +875,7 @@ fn test_resolved_market_always_has_winning_stake() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -932,7 +932,7 @@ fn test_fee_invariant_net_amount_never_exceeds_gross() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -1004,7 +1004,7 @@ fn test_contract_balance_covers_outstanding_claims() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,

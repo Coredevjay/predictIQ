@@ -123,7 +123,9 @@ module "ecs" {
   db_name               = var.db_name
   db_user               = var.db_username
   db_password           = var.db_password
-  redis_url             = module.redis.redis_url
+  redis_host            = module.redis.endpoint
+  redis_port            = module.redis.port
+  redis_auth_token      = var.redis_auth_token
   acm_certificate_arn   = var.acm_certificate_arn
   hmac_key              = var.hmac_key
   sendgrid_api_key      = var.sendgrid_api_key
@@ -138,4 +140,7 @@ module "monitoring" {
   environment = var.environment
   ecs_cluster = module.ecs.cluster_name
   ecs_service = module.ecs.service_name
+
+  alert_email_endpoints = var.alert_email_endpoints
+  alert_https_endpoints = var.alert_https_endpoints
 }

@@ -31,13 +31,19 @@ pub fn get_markets(e: &Env, offset: u32, limit: u32) -> Vec<Market> {
     markets_vec
 }
 
+/// Maximum number of market ids probed by a single `get_markets_by_status` call.
+pub const MAX_STATUS_PROBE: u64 = 1000;
+
 /// Paginated retrieval of markets by status.
 ///
 /// Issue #406: Uses the status index to avoid a full reverse scan.
 /// Instead of iterating all markets, we probe the index keys for the requested
 /// status bucket and load only matching market records.
 ///
-/// Complexity: O(limit) storage reads instead of O(total_markets).
+/// Complexity: one index probe per market id, newest first, until `limit`
+/// matches are found. A rare status may need to walk many ids, so at most
+/// [`MAX_STATUS_PROBE`] ids are probed per call; pages stop there even if
+/// fewer than `limit` markets matched.
 ///
 /// # Arguments
 /// * `status` - The status to filter by (e.g., Active, Resolved)
@@ -63,7 +69,8 @@ pub fn get_markets_by_status(
     // Issue #406: Probe the status index for each market ID.
     // Only load the full market record when the index key is present.
     // This avoids deserializing every market just to check its status field.
-    for i in (1..=count).rev() {
+    let lowest = count.saturating_sub(MAX_STATUS_PROBE) + 1;
+    for i in (lowest..=count).rev() {
         if markets::has_status_index(e, i, &status) {
             if skipped_count < offset {
                 skipped_count += 1;
@@ -122,7 +129,7 @@ mod tests {
         let token = Address::generate(e);
         let oracle_cfg = OracleConfig {
             oracle_address: Address::generate(e),
-            feed_id: String::from_str(e, "feed"),
+            feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: None,
             max_staleness_seconds: 3600,
             max_confidence_bps: 100,
