@@ -17,5 +17,6 @@ redis_auth_token      = "CiValidate!Redis#Placeholder2024XYZ"
 api_image_uri         = "123456789012.dkr.ecr.us-east-1.amazonaws.com/predictiq:ci-validate"
 api_container_port    = 8080
 api_desired_count     = 1
+api_min_count         = 1
 api_cpu               = 256
 api_memory            = 512

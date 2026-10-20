@@ -273,3 +273,11 @@ For infrastructure issues:
 - [Terraform Documentation](https://www.terraform.io/docs)
 - [AWS Provider Documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
 - [PredictIQ Architecture](../docs/ARCHITECTURE.md)
+
+## Redis TLS, alarms and autoscaling
+
+- ElastiCache enforces in-transit encryption; the module emits a `rediss://` URL and the API's `redis` crate is built with `tokio-rustls-comp`.
+- CloudWatch ALB alarms/dashboard use `aws_lb.main.arn_suffix` (passed into the monitoring module), not a wildcard.
+- Alarms cover ECS CPU/memory/running tasks, ALB 5xx/latency/unhealthy hosts, RDS CPU/storage/connections and Redis memory/evictions/replication lag; each description links its runbook in `docs/runbooks/`.
+- The ECS service autoscales on CPU and ALB request count per target between `api_min_count` and `api_max_count`.
+- `infrastructure/terraform/tests/check_invariants.sh` (run in the Terraform CI workflow) guards these.

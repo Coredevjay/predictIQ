@@ -116,6 +116,8 @@ module "ecs" {
   api_image_uri         = var.api_image_uri
   api_container_port    = var.api_container_port
   api_desired_count     = var.api_desired_count
+  api_min_count         = var.api_min_count
+  api_max_count         = var.api_max_count
   api_cpu               = var.api_cpu
   api_memory            = var.api_memory
   db_host               = module.rds.endpoint
@@ -138,4 +140,12 @@ module "monitoring" {
   environment = var.environment
   ecs_cluster = module.ecs.cluster_name
   ecs_service = module.ecs.service_name
+
+  alb_arn_suffix          = module.ecs.alb_arn_suffix
+  target_group_arn_suffix = module.ecs.target_group_arn_suffix
+  rds_instance_id         = module.rds.instance_id
+  redis_replication_group = module.redis.replication_group_id
+  api_desired_count       = var.api_desired_count
+  rds_free_storage_bytes  = var.rds_free_storage_alarm_bytes
+  alb_latency_seconds     = var.alb_latency_alarm_seconds
 }
