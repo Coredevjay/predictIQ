@@ -96,12 +96,13 @@ fn strip_html_and_truncate(input: &str, max_len: usize) -> String {
         "eval(",
         "expression(",
     ];
-    let mut lower = out.to_lowercase();
+    // ASCII lowercasing preserves byte offsets, so positions index `out` safely.
+    let mut lower = out.to_ascii_lowercase();
     for pat in &dangerous {
         // Replace occurrences without allocating per iteration
         while let Some(pos) = lower.find(pat) {
             out.drain(pos..pos + pat.len());
-            lower = out.to_lowercase();
+            lower = out.to_ascii_lowercase();
         }
     }
 

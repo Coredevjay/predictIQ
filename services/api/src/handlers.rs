@@ -1437,6 +1437,10 @@ pub async fn blockchain_tx_status(
 ) -> Result<impl IntoResponse, ApiError> {
     use crate::blockchain::WatchTxError;
 
+    if tx_hash.len() != 64 || !tx_hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request("tx_hash must be a 64-character hex string"));
+    }
+
     match state.blockchain.watch_transaction(&tx_hash).await {
         Ok(()) => {}
         Err(WatchTxError::AlreadyWatched) => {
