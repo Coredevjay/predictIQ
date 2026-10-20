@@ -1,4 +1,77 @@
 'use client';
-import { useEffect,useState } from 'react';
-type Key={id:string;name?:string;created_at?:string};
-export default function ApiKeys(){const [keys,setKeys]=useState<Key[]>([]),[message,setMessage]=useState('');const auth=()=>({'X-API-Key':sessionStorage.getItem('predictiq-admin-key')||''});const load=()=>fetch('/api/v1/admin/api-keys',{headers:auth()}).then(r=>r.json()).then(d=>setKeys(d.keys??d));useEffect(()=>{load()},[]);const rotate=async()=>{if(!confirm('Rotate this key? Your current session will be invalidated.'))return;const r=await fetch('/api/v1/admin/api-keys/rotate',{method:'POST',headers:{...auth(),'Content-Type':'application/json'}});sessionStorage.removeItem('predictiq-admin-key');setMessage(r.ok?'Key rotated. Please authenticate again.':'Rotation failed.');setKeys([])};return <main><h1>API keys</h1>{message&&<p role="alert">{message}</p>}<button onClick={rotate}>Rotate key</button><ul>{keys.map(k=><li key={k.id}>{k.name??k.id} {k.created_at&&`(${k.created_at})`}</li>)}</ul></main>}
+
+import { useCallback, useEffect, useState } from 'react';
+import { api, ADMIN_KEY_STORAGE, type AdminApiKey } from '@/lib/api/admin-client';
+
+export default function ApiKeys() {
+  const [keys, setKeys] = useState<AdminApiKey[]>([]);
+  const [message, setMessage] = useState('');
+  const [label, setLabel] = useState('');
+  const [newKey, setNewKey] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api.listApiKeys();
+      setKeys(Array.isArray(d) ? d : (d.keys ?? []));
+    } catch {
+      setMessage('Unable to load API keys.');
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const rotate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!label.trim()) return;
+    try {
+      const res = await api.rotateApiKey({ key_label: label.trim() });
+      // Only swap the stored key once the server has confirmed the rotation.
+      sessionStorage.setItem(ADMIN_KEY_STORAGE, res.new_key);
+      setNewKey(res.new_key);
+      setLabel('');
+      setMessage('Key rotated. Copy the new key now; it will not be shown again.');
+      load();
+    } catch {
+      setMessage('Rotation failed. Your current key is unchanged.');
+    }
+  };
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(newKey);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <main>
+      <h1>API keys</h1>
+      {message && <p role="alert">{message}</p>}
+      {newKey && (
+        <p>
+          <code data-testid="new-key">{newKey}</code>{' '}
+          <button onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+        </p>
+      )}
+      <form onSubmit={rotate}>
+        <label>
+          Key label
+          <input value={label} onChange={(e) => setLabel(e.target.value)} required />
+        </label>
+        <button type="submit">Rotate key</button>
+      </form>
+      <ul>
+        {keys.map((k) => (
+          <li key={k.id}>
+            {k.name ?? k.label ?? k.id} {k.created_at && `(${k.created_at})`}
+          </li>
+        ))}
+      </ul>
+    </main>
+  );
+}
