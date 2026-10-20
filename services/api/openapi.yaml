@@ -55,6 +55,153 @@ paths:
         "500":
           $ref: "#/components/responses/ApiError"
 
+  /health/live:
+    get:
+      tags: [health]
+      operationId: getHealthLive
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /health/ready:
+    get:
+      tags: [health]
+      operationId: getHealthReady
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          $ref: "#/components/responses/ApiError"
+
+  /health/dependencies:
+    get:
+      tags: [health]
+      operationId: getHealthDependencies
+      summary: Dependency health (database, cache, RPC)
+      responses:
+        "200":
+          description: Dependency status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "503":
+          $ref: "#/components/responses/ApiError"
+
+  /metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Metrics in Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/newsletter/gdpr/request-token:
+    post:
+      tags: [newsletter]
+      operationId: newsletterGdprRequestToken
+      summary: Request a GDPR verification token by email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Verification email sent if the address is subscribed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "400":
+          $ref: "#/components/responses/NewsletterResponse"
+        "429":
+          $ref: "#/components/responses/NewsletterResponse"
+
+  /api/v1/admin/api-keys:
+    get:
+      tags: [audit]
+      operationId: listApiKeys
+      summary: List active API keys (admin)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Active API keys
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
+  /api/v1/admin/api-keys/rotate:
+    post:
+      tags: [audit]
+      operationId: rotateApiKey
+      summary: Issue a new API key and expire the old one after an overlap window (admin)
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnyObject"
+      responses:
+        "201":
+          description: New key issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
+  /api/v1/admin/api-keys/{id}:
+    delete:
+      tags: [audit]
+      operationId: revokeApiKey
+      summary: Revoke an API key immediately (admin)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Key revoked
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
   /api/v1/statistics:
     get:
       tags: [markets]
@@ -246,7 +393,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Stellar address of the user
+          description: Stellar public key (G…, 56 chars, valid checksum)
         - $ref: "#/components/parameters/apiVersion"
         - $ref: "#/components/parameters/page"
         - $ref: "#/components/parameters/pageSize"

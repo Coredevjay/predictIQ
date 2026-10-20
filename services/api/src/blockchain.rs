@@ -275,6 +275,9 @@ pub struct ReplayRequest {
 pub struct ReplayProgress {
     pub from_ledger: u32,
     pub events_replayed: usize,
+    /// Highest ledger of any stored event (or `from_ledger` if none were stored).
+    #[serde(default)]
+    pub last_ledger: u32,
     pub completed: bool,
 }
 
@@ -1421,13 +1424,18 @@ impl BlockchainClient {
 
         let events = self.fetch_events_since(from_ledger).await
             .map_err(BlockchainError::from_anyhow)?;
-        let events_replayed = events.len();
+        let mut events_replayed = 0usize;
+        let mut last_ledger = from_ledger;
+        let mut skipped_beyond_tip = false;
 
         for event in events {
             // Only store events up to the confirmed tip (idempotent by key)
             if event.ledger > confirmed_tip {
+                skipped_beyond_tip = true;
                 continue;
             }
+            events_replayed += 1;
+            last_ledger = last_ledger.max(event.ledger);
             let event_key = format!("{}:event:{}", keys::CHAIN_PREFIX, event.id);
             self.cache
                 .set_json(&event_key, &event, Duration::from_secs(30 * 60))
@@ -1438,13 +1446,17 @@ impl BlockchainClient {
         let progress = ReplayProgress {
             from_ledger,
             events_replayed,
-            completed: true,
+            last_ledger,
+            completed: !skipped_beyond_tip,
         };
 
-        self.cache
-            .set_json(&progress_key, &progress, Duration::from_secs(60 * 60))
-            .await
-            .map_err(|e| BlockchainError::Internal(e.to_string()))?;
+        // Only cache a completed replay; an incomplete one must be re-runnable.
+        if progress.completed {
+            self.cache
+                .set_json(&progress_key, &progress, Duration::from_secs(60 * 60))
+                .await
+                .map_err(|e| BlockchainError::Internal(e.to_string()))?;
+        }
 
         tracing::info!(from_ledger, events_replayed, "event replay completed");
         Ok(progress)

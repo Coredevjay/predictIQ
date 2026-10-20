@@ -987,6 +987,17 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Revoke an active API key by id. Returns `true` if a key was revoked.
+    pub async fn api_key_revoke(&self, id: uuid::Uuid) -> anyhow::Result<bool> {
+        let result = self.with_timeout("api_key_revoke", sqlx::query(
+            "UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Validate a raw API key: compute its SHA-256 hash, then return the record
     /// if it exists, is not revoked, and is not expired.
     pub async fn api_key_validate(&self, key_hash: &str) -> anyhow::Result<Option<ApiKeyRecord>> {

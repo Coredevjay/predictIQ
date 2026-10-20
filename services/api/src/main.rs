@@ -22,7 +22,7 @@ use std::{sync::Arc, time::Duration};
 use axum::{
     http::{HeaderName, HeaderValue, Method},
     middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use tokio::net::TcpListener;
@@ -455,6 +455,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/admin/api-keys/rotate",
             post(handlers::rotate_api_key),
+        )
+        .route(
+            "/api/v1/admin/api-keys/:id",
+            delete(handlers::revoke_api_key),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
