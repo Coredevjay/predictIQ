@@ -14,7 +14,7 @@ pub enum DataKey {
     /// Presence key for the status index.
     /// `StatusIndex(market_id, status)` exists iff market `market_id` currently
     /// has `status`.  Querying by status probes these keys instead of loading
-    /// every market record, reducing per-call gas from O(total) to O(limit).
+    /// every market record (bounded by `MAX_STATUS_PROBE` ids per call).
     StatusIndex(u64, MarketStatus),
 }
 
@@ -23,6 +23,16 @@ pub fn has_status_index(e: &Env, market_id: u64, status: &MarketStatus) -> bool 
     e.storage()
         .persistent()
         .has(&DataKey::StatusIndex(market_id, status.clone()))
+}
+
+/// Extend the TTL of the status-index entry for `(market_id, status)` if present.
+pub fn extend_status_index_ttl(e: &Env, market_id: u64, status: &MarketStatus) {
+    let key = DataKey::StatusIndex(market_id, status.clone());
+    if e.storage().persistent().has(&key) {
+        e.storage()
+            .persistent()
+            .extend_ttl(&key, TTL_LOW_THRESHOLD, TTL_HIGH_THRESHOLD);
+    }
 }
 
 /// Write the status-index entry for `market_id` with `new_status`,
@@ -38,9 +48,11 @@ pub fn update_status_index(
             .persistent()
             .remove(&DataKey::StatusIndex(market_id, old_status.clone()));
     }
+    let key = DataKey::StatusIndex(market_id, new_status.clone());
+    e.storage().persistent().set(&key, &true);
     e.storage()
         .persistent()
-        .set(&DataKey::StatusIndex(market_id, new_status.clone()), &true);
+        .extend_ttl(&key, TTL_LOW_THRESHOLD, TTL_HIGH_THRESHOLD);
 }
 
 pub fn create_market(
@@ -495,6 +507,9 @@ pub fn bump_market_ttl(e: &Env, market_id: u64) {
         TTL_LOW_THRESHOLD,
         TTL_HIGH_THRESHOLD,
     );
+    if let Some(market) = get_market(e, market_id) {
+        extend_status_index_ttl(e, market_id, &market.status);
+    }
 }
 
 /// Maximum number of markets returned per paginated query
