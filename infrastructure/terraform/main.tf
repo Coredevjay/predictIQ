@@ -120,7 +120,7 @@ module "ecs" {
   api_max_count         = var.api_max_count
   api_cpu               = var.api_cpu
   api_memory            = var.api_memory
-  db_host               = module.rds.endpoint
+  db_host               = module.rds.address
   db_port               = 5432
   db_name               = var.db_name
   db_user               = var.db_username
@@ -132,6 +132,16 @@ module "ecs" {
   hmac_key              = var.hmac_key
   sendgrid_api_key      = var.sendgrid_api_key
   api_signing_key       = var.api_signing_key
+  app_env                    = var.app_env
+  base_url                   = var.base_url
+  cors_allowed_origins       = var.cors_allowed_origins
+  from_email                 = var.from_email
+  blockchain_rpc_url         = var.blockchain_rpc_url
+  predictiq_contract_id      = var.predictiq_contract_id
+  api_keys                   = var.api_keys
+  unsubscribe_signing_secret = var.unsubscribe_signing_secret
+  sendgrid_webhook_secret    = var.sendgrid_webhook_secret
+  email_idempotency_secret   = var.email_idempotency_secret
   ecs_tasks_sg_id       = aws_security_group.ecs_tasks.id
   otlp_endpoint         = var.otlp_endpoint
 }
