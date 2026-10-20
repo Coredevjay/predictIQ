@@ -16,7 +16,7 @@ The `/webhooks/sendgrid` endpoint receives and processes email delivery status e
 SendGrid signs every webhook request with an HMAC-SHA256 signature. The signature is verified by the `sendgrid_webhook_middleware` before the request reaches the handler.
 
 **Configuration:**
-- `SENDGRID_WEBHOOK_SECRET`: The shared secret used to verify signatures. Must be set in production.
+- `SENDGRID_WEBHOOK_SECRET`: SendGrid's Signed Event Webhook **public key** (base64 DER, ECDSA P-256). Must be set in production. HMAC-SHA256 with a shared secret is accepted only outside production, for local testing.
 - Signature is in the `X-Twilio-Email-Event-Webhook-Signature` header
 - Verification happens in `security::sendgrid_webhook_middleware` before body parsing
 
@@ -89,7 +89,7 @@ Provides fallback deduplication if:
 | Variable | Default | Purpose |
 |---|---|---|
 | `WEBHOOK_REPLAY_WINDOW_SECS` | `300` | Duration (seconds) that Redis nonces are retained |
-| `SENDGRID_WEBHOOK_SECRET` | (required) | Shared HMAC key for signature verification |
+| `SENDGRID_WEBHOOK_SECRET` | (required) | SendGrid ECDSA public key (base64 DER) for signature verification |
 
 **Production Checklist:**
 - [ ] `SENDGRID_WEBHOOK_SECRET` is set and matches the SendGrid dashboard

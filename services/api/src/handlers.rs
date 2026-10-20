@@ -546,7 +546,7 @@ pub async fn newsletter_subscribe(
         .unwrap_or(false);
 
     if !already_active {
-        let token = Uuid::new_v4().to_string();
+        let token = crate::newsletter::generate_opaque_unsubscribe_token().0;
         state
             .db
             .newsletter_upsert_pending(&email, &source, &token)

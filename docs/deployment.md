@@ -203,7 +203,7 @@ The API service is configured entirely via environment variables. Variables are 
 | `NEWSLETTER_TOKEN_TTL_SECS` | `86400` | Confirmation token expiry |
 | `OTLP_ENDPOINT` | *(none)* | OpenTelemetry collector endpoint |
 | `TRACE_SAMPLE_RATE` | `0.1` | Fraction of requests traced (0–1) |
-| `SENDGRID_WEBHOOK_SECRET` | *(none)* | SendGrid webhook signature secret |
+| `SENDGRID_WEBHOOK_SECRET` | *(none)* | SendGrid webhook ECDSA public key (base64 DER) |
 | `ADMIN_WHITELIST_IPS` | *(none — admin routes unrestricted)* | Comma-separated CIDR allowlist |
 
 ### ECS task secrets and environment mapping

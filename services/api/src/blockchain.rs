@@ -1053,6 +1053,9 @@ impl BlockchainClient {
 
         let events = self.fetch_events_since(cursor_ledger + 1).await?;
         for event in events {
+            self.db
+                .chain_event_insert(&event.id, event.ledger, &event.topic, event.tx_hash.as_deref(), &event.value)
+                .await?;
             let event_key = format!("{}:event:{}", keys::CHAIN_PREFIX, event.id);
             self.cache
                 .set_json(&event_key, &event, Duration::from_secs(30 * 60))
@@ -1074,7 +1077,21 @@ impl BlockchainClient {
         }
 
         for market_id in &self.sync_market_ids {
-            let _ = self.market_data_cached(*market_id).await;
+            if let Ok(m) = self.market_data_cached(*market_id).await {
+                if let Err(e) = self
+                    .db
+                    .market_upsert_from_chain(
+                        m.market_id,
+                        m.title.as_deref(),
+                        m.status.as_deref(),
+                        m.resolved_outcome.map(|o| o as i32),
+                        &m.onchain_volume,
+                    )
+                    .await
+                {
+                    tracing::warn!(market_id, error = %e, "market upsert failed");
+                }
+            }
             let _ = self.oracle_result_cached(*market_id).await;
         }
 
@@ -1428,6 +1445,10 @@ impl BlockchainClient {
             if event.ledger > confirmed_tip {
                 continue;
             }
+            self.db
+                .chain_event_insert(&event.id, event.ledger, &event.topic, event.tx_hash.as_deref(), &event.value)
+                .await
+                .map_err(|e| BlockchainError::Internal(e.to_string()))?;
             let event_key = format!("{}:event:{}", keys::CHAIN_PREFIX, event.id);
             self.cache
                 .set_json(&event_key, &event, Duration::from_secs(30 * 60))

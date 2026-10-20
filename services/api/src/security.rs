@@ -495,8 +495,10 @@ pub async fn metrics_auth_middleware(
 
 /// SendGrid webhook signature verification middleware.
 ///
-/// Verifies the `X-Twilio-Email-Event-Webhook-Signature` header using HMAC-SHA256
-/// against the raw request body. The `SENDGRID_WEBHOOK_SECRET` must be configured
+/// Verifies the `X-Twilio-Email-Event-Webhook-Signature` header as an ECDSA (P-256)
+/// signature over `timestamp + body`. `SENDGRID_WEBHOOK_SECRET` holds SendGrid's
+/// base64 DER public key (HMAC-SHA256 is accepted only outside production, for
+/// local testing). It must be configured
 /// for webhook security, except in development environment where it passes through.
 ///
 /// Replay protection: rejects requests whose `X-Twilio-Email-Event-Webhook-Timestamp`
@@ -561,7 +563,7 @@ pub async fn sendgrid_webhook_middleware(
 
         // Signature covers timestamp + payload per SendGrid spec
         let signed_payload = format!("{}{}", ts_str, String::from_utf8_lossy(&bytes));
-        if !signing::verify_signature(signed_payload.as_bytes(), sig, secret) {
+        if !signing::verify_sendgrid_signature(signed_payload.as_bytes(), sig, secret, is_dev) {
             return Err(StatusCode::UNAUTHORIZED);
         }
 
@@ -579,6 +581,35 @@ pub mod signing {
     use std::time::SystemTime;
 
     type HmacSha256 = Hmac<Sha256>;
+
+    /// Verify a SendGrid Signed Event Webhook signature (base64 DER ECDSA P-256
+    /// over `timestamp + payload`) against the base64 DER public key `key`.
+    pub fn verify_ecdsa_signature(payload: &[u8], signature: &str, key: &str) -> bool {
+        use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+        use p256::pkcs8::DecodePublicKey;
+
+        let Ok(key_der) = BASE64.decode(key.trim()) else { return false };
+        let Ok(vk) = VerifyingKey::from_public_key_der(&key_der) else { return false };
+        let Ok(sig_der) = BASE64.decode(signature.trim()) else { return false };
+        let Ok(sig) = Signature::from_der(&sig_der) else { return false };
+        vk.verify(payload, &sig).is_ok()
+    }
+
+    /// ECDSA verification; when `allow_hmac` (non-production only) and `key`
+    /// is not a valid public key, fall back to the legacy HMAC mode.
+    pub fn verify_sendgrid_signature(payload: &[u8], signature: &str, key: &str, allow_hmac: bool) -> bool {
+        use p256::pkcs8::DecodePublicKey;
+        let is_public_key = BASE64
+            .decode(key.trim())
+            .ok()
+            .and_then(|d| p256::ecdsa::VerifyingKey::from_public_key_der(&d).ok())
+            .is_some();
+        if is_public_key {
+            verify_ecdsa_signature(payload, signature, key)
+        } else {
+            allow_hmac && verify_signature(payload, signature, key)
+        }
+    }
 
     pub fn verify_signature(payload: &[u8], signature: &str, secret: &str) -> bool {
         let mut mac = match HmacSha256::new_from_slice(secret.as_bytes()) {
@@ -681,6 +712,24 @@ impl IntoResponse for SecurityError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sendgrid_ecdsa_signature_roundtrip() {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine};
+        use p256::ecdsa::{signature::Signer, Signature, SigningKey};
+        use p256::pkcs8::EncodePublicKey;
+
+        let sk = SigningKey::from_slice(&[7u8; 32]).unwrap();
+        let pk = B64.encode(sk.verifying_key().to_public_key_der().unwrap().as_bytes());
+        let payload = b"1700000000[{\"event\":\"delivered\"}]";
+        let sig: Signature = sk.sign(payload);
+        let sig_b64 = B64.encode(sig.to_der().as_bytes());
+
+        assert!(super::signing::verify_sendgrid_signature(payload, &sig_b64, &pk, false));
+        assert!(!super::signing::verify_sendgrid_signature(b"tampered", &sig_b64, &pk, false));
+        // HMAC fallback is only honoured when explicitly allowed and key isn't a public key.
+        assert!(!super::signing::verify_sendgrid_signature(payload, &sig_b64, "not-a-key", false));
+    }
+
     use super::*;
     use axum::http::HeaderMap;
     use ipnet::IpNet;

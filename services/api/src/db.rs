@@ -336,6 +336,65 @@ impl Database {
         Ok(value)
     }
 
+    /// Durably persist a chain event; idempotent on `event_id`.
+    pub async fn chain_event_insert(
+        &self,
+        event_id: &str,
+        ledger: u32,
+        topic: &str,
+        tx_hash: Option<&str>,
+        payload: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        self.with_timeout("chain_event_insert", sqlx::query(
+            "INSERT INTO chain_events (event_id, ledger, topic, tx_hash, payload)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (event_id) DO NOTHING",
+        )
+        .bind(event_id)
+        .bind(ledger as i64)
+        .bind(topic)
+        .bind(tx_hash)
+        .bind(payload)
+        .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
+        Ok(())
+    }
+
+    /// Upsert a market read from the chain, keyed by `on_chain_id`.
+    /// A `resolved` status without an outcome is stored as `active` to satisfy
+    /// the table's consistency constraint.
+    pub async fn market_upsert_from_chain(
+        &self,
+        on_chain_id: i64,
+        title: Option<&str>,
+        status: Option<&str>,
+        outcome_index: Option<i32>,
+        total_volume: &str,
+    ) -> anyhow::Result<()> {
+        let (status, outcome_index) = match (status, outcome_index) {
+            (Some("resolved"), Some(o)) => ("resolved", Some(o)),
+            (Some("cancelled"), o) => ("cancelled", o),
+            _ => ("active", None),
+        };
+        let title = title.map(str::to_owned).unwrap_or_else(|| format!("Market {on_chain_id}"));
+        self.with_timeout("market_upsert_from_chain", sqlx::query(
+            "INSERT INTO markets (on_chain_id, title, status, outcome_index, total_volume, ends_at, resolved_at)
+             VALUES ($1, $2, $3, $4, $5::NUMERIC, NOW(), CASE WHEN $3 = 'resolved' THEN NOW() END)
+             ON CONFLICT (on_chain_id) DO UPDATE SET
+                 title = EXCLUDED.title,
+                 status = EXCLUDED.status,
+                 outcome_index = EXCLUDED.outcome_index,
+                 total_volume = EXCLUDED.total_volume,
+                 resolved_at = COALESCE(markets.resolved_at, EXCLUDED.resolved_at)",
+        )
+        .bind(on_chain_id)
+        .bind(title)
+        .bind(status)
+        .bind(outcome_index)
+        .bind(total_volume)
+        .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
+        Ok(())
+    }
+
     pub async fn newsletter_get_by_email(
         &self,
         normalized_email: &str,
@@ -383,7 +442,7 @@ impl Database {
         )
         .bind(normalized_email)
         .bind(source)
-        .bind(confirmation_token)
+        .bind(crate::newsletter::hash_unsubscribe_token(confirmation_token))
         .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
 
         Ok(())
@@ -400,7 +459,7 @@ impl Database {
              WHERE confirmation_token = $1
                AND created_at > NOW() - ($2 || ' seconds')::INTERVAL",
         )
-        .bind(token)
+        .bind(crate::newsletter::hash_unsubscribe_token(token))
         .bind(token_ttl_secs as i64)
         .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
 
