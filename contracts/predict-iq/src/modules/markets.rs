@@ -55,6 +55,84 @@ pub fn update_status_index(
         .extend_ttl(&key, TTL_LOW_THRESHOLD, TTL_HIGH_THRESHOLD);
 }
 
+/// Issue #1714: true if no allowlist is configured, or `token` is on it.
+pub fn is_token_allowed(e: &Env, token: &Address) -> bool {
+    let count: u32 = e
+        .storage()
+        .persistent()
+        .get(&ConfigKey::AllowedTokenCount)
+        .unwrap_or(0);
+    count == 0
+        || e.storage()
+            .persistent()
+            .has(&ConfigKey::AllowedToken(token.clone()))
+}
+
+/// Issue #1714: add a settlement token to the allowlist (admin only).
+pub fn add_allowed_token(e: &Env, token: Address) -> Result<(), ErrorCode> {
+    crate::modules::admin::require_admin(e)?;
+    let key = ConfigKey::AllowedToken(token);
+    if !e.storage().persistent().has(&key) {
+        e.storage().persistent().set(&key, &true);
+        let count: u32 = e
+            .storage()
+            .persistent()
+            .get(&ConfigKey::AllowedTokenCount)
+            .unwrap_or(0);
+        e.storage()
+            .persistent()
+            .set(&ConfigKey::AllowedTokenCount, &(count + 1));
+    }
+    Ok(())
+}
+
+/// Issue #1714: remove a settlement token from the allowlist (admin only).
+pub fn remove_allowed_token(e: &Env, token: Address) -> Result<(), ErrorCode> {
+    crate::modules::admin::require_admin(e)?;
+    let key = ConfigKey::AllowedToken(token);
+    if e.storage().persistent().has(&key) {
+        e.storage().persistent().remove(&key);
+        let count: u32 = e
+            .storage()
+            .persistent()
+            .get(&ConfigKey::AllowedTokenCount)
+            .unwrap_or(0);
+        e.storage()
+            .persistent()
+            .set(&ConfigKey::AllowedTokenCount, &count.saturating_sub(1));
+    }
+    Ok(())
+}
+
+/// Issue #1715: validate an oracle config at market creation.
+fn validate_oracle_config(e: &Env, cfg: &OracleConfig) -> Result<(), ErrorCode> {
+    // Pyth feed ids are 32 bytes, hex-encoded (64 chars), optionally 0x-prefixed.
+    let len = cfg.feed_id.len() as usize;
+    if len != 64 && len != 66 {
+        return Err(ErrorCode::InvalidOracleConfig);
+    }
+    let mut buf = [0u8; 66];
+    cfg.feed_id.copy_into_slice(&mut buf[..len]);
+    let hex = if len == 66 {
+        if buf[0] != b'0' || (buf[1] != b'x' && buf[1] != b'X') {
+            return Err(ErrorCode::InvalidOracleConfig);
+        }
+        &buf[2..len]
+    } else {
+        &buf[..len]
+    };
+    if !hex.iter().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ErrorCode::InvalidOracleConfig);
+    }
+    if cfg.max_staleness_seconds == 0
+        || cfg.max_confidence_bps > 10_000
+        || cfg.oracle_address == e.current_contract_address()
+    {
+        return Err(ErrorCode::InvalidOracleConfig);
+    }
+    Ok(())
+}
+
 pub fn create_market(
     e: &Env,
     creator: Address,
@@ -126,6 +204,25 @@ pub fn create_market_with_dispute_window(
     if options.len() > crate::types::MAX_OUTCOMES_PER_MARKET {
         return Err(ErrorCode::TooManyOutcomes);
     }
+    if options.len() < crate::types::MIN_OUTCOMES_PER_MARKET {
+        return Err(ErrorCode::InvalidOutcome);
+    }
+    if description.len() > crate::types::MAX_DESCRIPTION_BYTES {
+        return Err(ErrorCode::DescriptionTooLong);
+    }
+    for option in options.iter() {
+        if option.len() == 0 || option.len() > crate::types::MAX_OPTION_BYTES {
+            return Err(ErrorCode::InvalidOptionLength);
+        }
+    }
+
+    // Issue #1714: settlement token must be allowlisted (once an allowlist is configured).
+    if !is_token_allowed(e, &native_token) {
+        return Err(ErrorCode::TokenNotAllowed);
+    }
+
+    // Issue #1715: reject bad oracle configs at creation instead of at resolution.
+    validate_oracle_config(e, &oracle_config)?;
 
     // Validate parent market if this is a conditional market
     if parent_id > 0 {
@@ -589,7 +686,7 @@ mod markets_prune_tests {
             winning_outcome: Some(0),
             oracle_config: OracleConfig {
                 oracle_address: Address::generate(e),
-                feed_id: String::from_str(e, "test"),
+                feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                 min_responses: Some(1),
                 max_staleness_seconds: 3600,
                 max_confidence_bps: 100,

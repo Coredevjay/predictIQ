@@ -29,7 +29,7 @@ fn test_classic_asset_sac_integration() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "eth"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -96,7 +96,7 @@ fn test_clawback_detection_cancels_market() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -152,7 +152,7 @@ fn test_classic_asset_full_lifecycle() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "btc"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -228,7 +228,7 @@ fn test_frozen_asset_handling() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -281,7 +281,7 @@ fn test_transfer_failure_returns_error_not_panic() {
     options.push_back(String::from_str(&e, "No"));
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,

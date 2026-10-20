@@ -44,7 +44,7 @@ fn test_admin_cancel_market() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -77,7 +77,7 @@ fn test_withdraw_refund_full_amount() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -122,7 +122,7 @@ fn test_refund_no_fee_collected() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -159,7 +159,7 @@ fn test_refund_only_on_cancelled_market() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -189,7 +189,7 @@ fn test_refund_only_once() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -233,7 +233,7 @@ fn test_creator_deposit_refunded_on_cancellation() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -290,7 +290,7 @@ fn test_cancel_vote_threshold_no_overflow() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -339,7 +339,7 @@ fn test_cancel_vote_rejected_before_voting_period_ends() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -389,7 +389,7 @@ fn test_cancel_vote_rejected_below_quorum() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -441,7 +441,7 @@ fn test_cancel_vote_tally_sum_no_overflow() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -496,7 +496,7 @@ fn test_creator_deposit_refund_without_bet() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -545,7 +545,7 @@ fn test_release_creation_deposit_rejects_open_market() {
         &(env.ledger().timestamp() + 2000),
         &crate::types::OracleConfig {
             oracle_address: oracle,
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,

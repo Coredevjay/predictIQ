@@ -21,7 +21,7 @@ fn test_paginated_markets() {
         let options = Vec::from_array(&e, [String::from_str(&e, "Yes"), String::from_str(&e, "No")]);
         let oracle_cfg = OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: None,
             max_staleness_seconds: 3600,
             max_confidence_bps: 100,
@@ -80,7 +80,7 @@ fn test_paginated_archived_markets() {
         let options = Vec::from_array(&e, [String::from_str(&e, "Yes"), String::from_str(&e, "No")]);
         let oracle_cfg = OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: None,
             max_staleness_seconds: 3600,
             max_confidence_bps: 100,
@@ -135,7 +135,7 @@ fn test_status_based_pagination() {
         let options = Vec::from_array(&e, [String::from_str(&e, "A"), String::from_str(&e, "B")]);
         let oracle_cfg = OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: None,
             max_staleness_seconds: 3600,
             max_confidence_bps: 100,
