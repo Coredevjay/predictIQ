@@ -256,6 +256,11 @@ impl PredictIQ {
         crate::modules::oracles::set_oracle_result(&e, market_id, oracle_id, outcome)
     }
 
+    /// Permissionless: pull the Pyth price on-chain and record it as the oracle result.
+    pub fn resolve_via_oracle(e: Env, market_id: u64) -> Result<u32, ErrorCode> {
+        crate::modules::oracles::resolve_via_oracle(&e, market_id)
+    }
+
     pub fn get_oracle_result(e: Env, market_id: u64, oracle_id: u32) -> Option<u32> {
         crate::modules::oracles::get_oracle_result(&e, market_id, oracle_id)
     }
