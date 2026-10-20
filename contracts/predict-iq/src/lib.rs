@@ -4,7 +4,9 @@ use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 mod errors;
 mod modules;
 pub mod pyth_client;
+#[cfg(test)]
 mod test;
+#[cfg(test)]
 mod test_pyth_integration;
 pub mod types;
 
@@ -256,6 +258,11 @@ impl PredictIQ {
         crate::modules::oracles::set_oracle_result(&e, market_id, oracle_id, outcome)
     }
 
+    /// Permissionless: pull the Pyth price on-chain and record it as the oracle result.
+    pub fn resolve_via_oracle(e: Env, market_id: u64) -> Result<u32, ErrorCode> {
+        crate::modules::oracles::resolve_via_oracle(&e, market_id)
+    }
+
     pub fn get_oracle_result(e: Env, market_id: u64, oracle_id: u32) -> Option<u32> {
         crate::modules::oracles::get_oracle_result(&e, market_id, oracle_id)
     }
@@ -308,6 +315,44 @@ impl PredictIQ {
         crate::modules::admin::get_guardian(&e)
     }
 
+    pub fn get_circuit_breaker_state(e: Env) -> CircuitBreakerState {
+        crate::modules::circuit_breaker::get_state(&e)
+    }
+
+    pub fn get_bet(
+        e: Env,
+        market_id: u64,
+        bettor: Address,
+        outcome: u32,
+    ) -> Option<crate::types::Bet> {
+        crate::modules::bets::get_bet(&e, market_id, bettor, outcome)
+    }
+
+    pub fn unlock_tokens(e: Env, voter: Address, market_id: u64) -> Result<(), ErrorCode> {
+        crate::modules::voting::unlock_tokens(&e, voter, market_id)
+    }
+
+    pub fn get_markets(e: Env, offset: u32, limit: u32) -> Vec<crate::types::Market> {
+        crate::modules::queries::get_markets(&e, offset, limit)
+    }
+
+    pub fn get_markets_by_status(
+        e: Env,
+        status: crate::types::MarketStatus,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<crate::types::Market> {
+        crate::modules::queries::get_markets_by_status(&e, status, offset, limit)
+    }
+
+    pub fn get_guardians_paginated(
+        e: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<crate::types::Guardian> {
+        crate::modules::queries::get_guardians_paginated(&e, offset, limit)
+    }
+
     pub fn pause(e: Env) -> Result<(), ErrorCode> {
         crate::modules::circuit_breaker::pause(&e)
     }
@@ -350,6 +395,21 @@ impl PredictIQ {
         native_token: Address,
     ) -> Result<(), ErrorCode> {
         crate::modules::markets::release_creation_deposit(&e, market_id, native_token)
+    }
+
+    /// Issue #1714: Allow a settlement token for new markets (admin only)
+    pub fn add_allowed_token(e: Env, token: Address) -> Result<(), ErrorCode> {
+        crate::modules::markets::add_allowed_token(&e, token)
+    }
+
+    /// Issue #1714: Remove a settlement token from the allowlist (admin only)
+    pub fn remove_allowed_token(e: Env, token: Address) -> Result<(), ErrorCode> {
+        crate::modules::markets::remove_allowed_token(&e, token)
+    }
+
+    /// Issue #1714: Whether a token may be used as a market settlement asset
+    pub fn is_token_allowed(e: Env, token: Address) -> bool {
+        crate::modules::markets::is_token_allowed(&e, &token)
     }
 
     /// Issue #507: Set market creation fee (admin only)

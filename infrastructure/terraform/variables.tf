@@ -183,6 +183,35 @@ variable "api_desired_count" {
   }
 }
 
+variable "api_min_count" {
+  description = "Minimum API tasks for autoscaling"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.api_min_count >= 1 && var.api_min_count <= var.api_max_count
+    error_message = "api_min_count must be >= 1 and <= api_max_count."
+  }
+}
+
+variable "api_max_count" {
+  description = "Maximum API tasks for autoscaling"
+  type        = number
+  default     = 10
+}
+
+variable "rds_free_storage_alarm_bytes" {
+  description = "Alarm when RDS free storage drops below this many bytes"
+  type        = number
+  default     = 5368709120
+}
+
+variable "alb_latency_alarm_seconds" {
+  description = "Alarm when ALB p95 TargetResponseTime exceeds this many seconds"
+  type        = number
+  default     = 1
+}
+
 variable "api_cpu" {
   description = "API task CPU units"
   type        = number
@@ -245,4 +274,75 @@ variable "api_signing_key" {
   validation {
     condition     = length(var.api_signing_key) >= 32
     error_message = "API signing key must be at least 32 characters."
+  }
+}
 
+variable "app_env" {
+  description = "Runtime APP_ENV/RUST_ENV for the API (development, staging, production)"
+  type        = string
+  validation {
+    condition     = contains(["development", "staging", "production"], var.app_env)
+    error_message = "app_env must be one of: development, staging, production."
+  }
+}
+
+variable "base_url" {
+  description = "Public base URL of the API (BASE_URL)"
+  type        = string
+}
+
+variable "cors_allowed_origins" {
+  description = "Comma-separated CORS_ALLOWED_ORIGINS"
+  type        = string
+}
+
+variable "from_email" {
+  description = "Sender address (FROM_EMAIL)"
+  type        = string
+}
+
+variable "blockchain_rpc_url" {
+  description = "Soroban RPC URL (BLOCKCHAIN_RPC_URL)"
+  type        = string
+}
+
+variable "predictiq_contract_id" {
+  description = "Deployed contract ID (PREDICTIQ_CONTRACT_ID)"
+  type        = string
+}
+
+variable "api_keys" {
+  description = "Comma-separated API keys (API_KEYS). Stored in Secrets Manager."
+  type        = string
+  sensitive   = true
+}
+
+variable "unsubscribe_signing_secret" {
+  description = "UNSUBSCRIBE_SIGNING_SECRET. Stored in Secrets Manager."
+  type        = string
+  sensitive   = true
+}
+
+variable "sendgrid_webhook_secret" {
+  description = "SENDGRID_WEBHOOK_SECRET. Stored in Secrets Manager."
+  type        = string
+  sensitive   = true
+}
+
+variable "email_idempotency_secret" {
+  description = "EMAIL_IDEMPOTENCY_SECRET. Stored in Secrets Manager."
+  type        = string
+  sensitive   = true
+}
+
+variable "alert_email_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "Email addresses subscribed to the alerts SNS topic."
+}
+
+variable "alert_https_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "HTTPS endpoints (PagerDuty/Slack) subscribed to the alerts SNS topic."
+}

@@ -31,6 +31,10 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      - name: Security invariants (#1775 #1782 #1783 #1784)
+        run: bash tests/check_security_invariants.sh
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Terraform fmt
         id: fmt
         run: terraform fmt -check -recursive
@@ -52,6 +56,22 @@ jobs:
       - name: Fail on fmt errors
         if: steps.fmt.outcome == 'failure'
         run: exit 1
+
+  terraform-hardening:
+    name: Terraform Hardening Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_terraform_hardening.py
+
+  terraform-invariants:
+    name: Terraform Invariant Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash infrastructure/terraform/tests/check_invariants.sh
 
   terraform-validate:
     name: Terraform Validate
@@ -203,7 +223,7 @@ jobs:
 
   all-terraform-checks-passed:
     name: All Terraform Checks Passed
-    needs: [terraform-fmt, terraform-validate, terraform-plan]
+    needs: [terraform-fmt, terraform-hardening, terraform-invariants, terraform-validate, terraform-plan]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

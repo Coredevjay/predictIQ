@@ -3,7 +3,8 @@
 import React from 'react';
 import { api, ApiError } from '../../lib/api/public-client';
 import { useWallet, WALLET_NOT_INSTALLED } from '../../lib/wallet/WalletProvider';
-import { fetchNativeBalance } from '../../lib/wallet/balance';
+import { fetchAssetBalance, fetchNativeBalance } from '../../lib/wallet/balance';
+import { SUPPORTED_ASSETS, getSupportedAsset } from '../../lib/assets';
 import { INSUFFICIENT_BALANCE_MESSAGE, isInsufficientBalanceError } from '../../lib/wallet/errors';
 import { useI18n } from '../../lib/hooks/useI18n';
 import './PlaceBetForm.css';
@@ -17,6 +18,8 @@ export interface BetMarket {
   id: number | string;
   title: string;
   outcomes: MarketOutcome[];
+  /** Settlement asset address (SAC/classic issuer or 'native'); defaults to XLM. */
+  token_address?: string;
 }
 
 interface PlaceBetFormProps {
@@ -43,7 +46,10 @@ export const PlaceBetForm: React.FC<PlaceBetFormProps> = ({ market, onSubmitted 
   const [insufficientBalance, setInsufficientBalance] = React.useState<{
     required: string;
     current: string | null;
+    code: string;
   } | null>(null);
+  const settlementAsset =
+    SUPPORTED_ASSETS.find((a) => a.address === market.token_address) ?? getSupportedAsset('native:XLM')!;
 
   // Poll the submitted transaction until it leaves the "pending" state.
   React.useEffect(() => {
@@ -122,8 +128,12 @@ export const PlaceBetForm: React.FC<PlaceBetFormProps> = ({ market, onSubmitted 
         // Read the balance fresh at the moment of failure — never the value
         // cached from page load — since the wallet's actual asset state is
         // what the user needs to see to understand the error (see #79).
-        const currentBalance = await fetchNativeBalance(wallet.address, wallet.network);
-        setInsufficientBalance({ required: amount, current: currentBalance });
+        const asset = settlementAsset;
+        const currentBalance =
+          asset.address === 'native'
+            ? await fetchNativeBalance(wallet.address, wallet.network)
+            : await fetchAssetBalance(wallet.address, wallet.network, asset.code, asset.address);
+        setInsufficientBalance({ required: amount, current: currentBalance, code: asset.code });
       } else {
         const message =
           err instanceof ApiError ? err.message : 'Failed to submit your bet. Please try again.';
@@ -208,8 +218,8 @@ export const PlaceBetForm: React.FC<PlaceBetFormProps> = ({ market, onSubmitted 
       {insufficientBalance && (
         <p className="place-bet-form__error" role="alert">
           {INSUFFICIENT_BALANCE_MESSAGE} Your balance is{' '}
-          {insufficientBalance.current ?? 'unavailable'} XLM, but this bet requires{' '}
-          {insufficientBalance.required} XLM.
+          {insufficientBalance.current ?? 'unavailable'} {insufficientBalance.code}, but this bet requires{' '}
+          {insufficientBalance.required} {insufficientBalance.code}.
         </p>
       )}
 

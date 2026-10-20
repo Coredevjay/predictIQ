@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useI18n } from '../../lib/hooks/useI18n';
-import { useActiveNavItem } from '../../../hooks/useActiveNavItem';
+import { api, ApiError, ADMIN_KEY_STORAGE } from '../../lib/api/admin-client';
 import '../../styles/admin.css';
 
 function AdminAuthGate({ children }: { children: React.ReactNode }) {
@@ -15,52 +15,41 @@ function AdminAuthGate({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    const k = sessionStorage.getItem('predictiq-admin-key');
-    if (k) {
-      setKey(k);
-      fetch('/api/v1/admin/session', { headers: { 'X-API-Key': k } })
-        .then((r) => {
-          if (r.ok) {
-            setOk(true);
-          } else {
-            sessionStorage.removeItem('predictiq-admin-key');
-            setKey('');
-            setError('Session expired. Please log in again.');
-          }
-        })
-        .catch(() => {
-          sessionStorage.removeItem('predictiq-admin-key');
-          setKey('');
-          setError('Failed to validate session.');
-        });
-    }
+    const k = sessionStorage.getItem(ADMIN_KEY_STORAGE);
+    if (!k) return;
+    setKey(k);
+    api
+      .listApiKeys(k)
+      .then(() => setOk(true))
+      .catch(() => {
+        sessionStorage.removeItem(ADMIN_KEY_STORAGE);
+        setKey('');
+        setError('Session expired. Please log in again.');
+      });
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
-
     try {
-      const response = await fetch('/api/v1/admin/session', {
-        headers: { 'X-API-Key': key },
-      });
-
-      if (response.ok) {
-        sessionStorage.setItem('predictiq-admin-key', key);
-        setOk(true);
-      } else {
-        setError('Invalid API key. Please try again.');
-      }
-    } catch {
-      setError('Failed to validate API key. Please try again.');
+      await api.listApiKeys(key);
+      sessionStorage.setItem(ADMIN_KEY_STORAGE, key);
+      setOk(true);
+    } catch (err) {
+      const unauthorized = err instanceof ApiError && (err.status === 401 || err.status === 403);
+      setError(
+        unauthorized
+          ? 'Invalid API key. Please try again.'
+          : 'Failed to validate API key. Please try again.'
+      );
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleLogout = () => {
-    sessionStorage.removeItem('predictiq-admin-key');
+    sessionStorage.removeItem(ADMIN_KEY_STORAGE);
     setKey('');
     setOk(false);
     setError('');
@@ -79,7 +68,6 @@ function AdminAuthGate({ children }: { children: React.ReactNode }) {
             disabled={isLoading}
           />
         </label>
-        <button type="submit">{t('admin.continue')}</button>
         {error && <div className="admin-auth-error">{error}</div>}
         <button type="submit" disabled={isLoading}>
           {isLoading ? 'Validating...' : t('admin.continue')}
@@ -99,7 +87,8 @@ function AdminAuthGate({ children }: { children: React.ReactNode }) {
 }
 
 function AdminNavLink({ href, label }: { href: string; label: string }) {
-  const isActive = useActiveNavItem(href);
+  const pathname = usePathname();
+  const isActive = pathname === href || pathname?.startsWith(`${href}/`);
   return (
     <Link
       href={href}
@@ -113,9 +102,6 @@ function AdminNavLink({ href, label }: { href: string; label: string }) {
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
-  const pathname = usePathname();
-
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const navItems = [
     { href: '/admin/email/preview', label: t('admin.emailPreview') },
     { href: '/admin/email/analytics', label: t('admin.emailAnalytics') },
@@ -146,19 +132,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
 
             <nav className="admin-nav" aria-label={t('admin.subNav')}>
-              {navItems.map((item) => {
-                const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`admin-nav-link ${isActive ? 'active' : ''}`}
-                    aria-current={isActive ? 'page' : undefined}
-                  >
-                    {item.label}
-                  </Link>
-                );
-              })}
               {navItems.map((item) => (
                 <AdminNavLink key={item.href} href={item.href} label={item.label} />
               ))}

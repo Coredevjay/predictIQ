@@ -26,6 +26,29 @@ variable "api_desired_count" {
   type = number
 }
 
+variable "api_min_count" {
+  type        = number
+  default     = 2
+  description = "Minimum number of API tasks for autoscaling"
+}
+
+variable "api_max_count" {
+  type        = number
+  default     = 10
+  description = "Maximum number of API tasks for autoscaling"
+}
+
+variable "autoscaling_cpu_target" {
+  type    = number
+  default = 60
+}
+
+variable "autoscaling_requests_per_target" {
+  type        = number
+  default     = 1000
+  description = "Target ALB requests per target per minute"
+}
+
 variable "api_cpu" {
   type = number
 }
@@ -34,9 +57,32 @@ variable "api_memory" {
   type = number
 }
 
-variable "redis_url" {
+# Redis connection components. The REDIS_URL is assembled by the application at
+# runtime, so the credential-bearing URL never appears in Terraform state.
+variable "redis_host" {
+  type = string
+}
+
+variable "redis_port" {
+  type    = number
+  default = 6379
+}
+
+variable "redis_auth_token" {
   type      = string
   sensitive = true
+}
+
+variable "secret_rotation_lambda_arn" {
+  type        = string
+  default     = null
+  description = "ARN of a rotation Lambda for DB/Redis secrets. When set, 30-day automatic rotation is enabled."
+}
+
+variable "log_retention_days" {
+  type        = number
+  default     = null
+  description = "CloudWatch log retention. Defaults to 365 in prod and 7 elsewhere."
 }
 
 # Individual database credential components.
@@ -102,6 +148,61 @@ variable "api_signing_key" {
   sensitive   = true
 }
 
+variable "app_env" {
+  type        = string
+  description = "Value for APP_ENV/RUST_ENV; one of development, staging, production"
+  validation {
+    condition     = contains(["development", "staging", "production"], var.app_env)
+    error_message = "app_env must be one of: development, staging, production."
+  }
+}
+
+variable "base_url" {
+  type        = string
+  description = "Public base URL injected as BASE_URL"
+}
+
+variable "cors_allowed_origins" {
+  type        = string
+  description = "Comma-separated origins injected as CORS_ALLOWED_ORIGINS"
+}
+
+variable "from_email" {
+  type        = string
+  description = "Sender address injected as FROM_EMAIL"
+}
+
+variable "blockchain_rpc_url" {
+  type        = string
+  description = "Soroban RPC URL injected as BLOCKCHAIN_RPC_URL"
+}
+
+variable "predictiq_contract_id" {
+  type        = string
+  description = "Contract ID injected as PREDICTIQ_CONTRACT_ID"
+}
+
+variable "api_keys" {
+  type        = string
+  sensitive   = true
+  description = "Comma-separated API keys injected as API_KEYS"
+}
+
+variable "unsubscribe_signing_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "sendgrid_webhook_secret" {
+  type      = string
+  sensitive = true
+}
+
+variable "email_idempotency_secret" {
+  type      = string
+  sensitive = true
+}
+
 variable "otlp_endpoint" {
   type        = string
   default     = ""
@@ -113,7 +214,26 @@ variable "ecs_tasks_sg_id" {
   description = "Security group ID of the ECS tasks (managed at root level)"
 }
 
+variable "shutdown_timeout_seconds" {
+  type        = number
+  default     = 30
+  description = "App graceful-shutdown timeout (SHUTDOWN_TIMEOUT_SECS). Drives ECS stopTimeout and ALB deregistration delay."
+}
+
+variable "alb_deletion_protection" {
+  type        = bool
+  default     = null
+  description = "Enable ALB deletion protection. Defaults to true in prod, false elsewhere."
+}
+
 locals {
+  extra_secrets = {
+    api_keys                   = { env = "API_KEYS", value = var.api_keys }
+    unsubscribe_signing_secret = { env = "UNSUBSCRIBE_SIGNING_SECRET", value = var.unsubscribe_signing_secret }
+    sendgrid_webhook_secret    = { env = "SENDGRID_WEBHOOK_SECRET", value = var.sendgrid_webhook_secret }
+    email_idempotency_secret   = { env = "EMAIL_IDEMPOTENCY_SECRET", value = var.email_idempotency_secret }
+  }
+
   common_tags = {
     Project     = "predictiq"
     Environment = var.environment
@@ -137,9 +257,46 @@ resource "aws_ecs_cluster" "main" {
   })
 }
 
+# Per-environment customer-managed key for secrets and logs.
+resource "aws_kms_key" "main" {
+  description             = "predictiq-${var.environment} secrets and log encryption"
+  enable_key_rotation     = true
+  deletion_window_in_days = 30
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableRootAccount"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "AllowCloudWatchLogs"
+        Effect    = "Allow"
+        Principal = { Service = "logs.${data.aws_region.current.name}.amazonaws.com" }
+        Action    = ["kms:Encrypt*", "kms:Decrypt*", "kms:ReEncrypt*", "kms:GenerateDataKey*", "kms:Describe*"]
+        Resource  = "*"
+      }
+    ]
+  })
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-kms"
+  })
+}
+
+resource "aws_kms_alias" "main" {
+  name          = "alias/predictiq-${var.environment}"
+  target_key_id = aws_kms_key.main.key_id
+}
+
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/predictiq-${var.environment}"
-  retention_in_days = var.environment == "prod" ? 30 : 7
+  retention_in_days = coalesce(var.log_retention_days, var.environment == "prod" ? 365 : 7)
+  kms_key_id        = aws_kms_key.main.arn
 
   tags = merge(local.common_tags, {
     Name = "predictiq-${var.environment}-logs"
@@ -162,6 +319,14 @@ resource "aws_ecs_task_definition" "api" {
       name      = "api"
       image     = var.api_image_uri
       essential = true
+      stopTimeout = var.shutdown_timeout_seconds
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -fsS http://localhost:${var.api_container_port}/health/live || exit 1"]
+        interval    = 15
+        timeout     = 5
+        retries     = 2
+        startPeriod = 30
+      }
       portMappings = [
         {
           containerPort = var.api_container_port
@@ -173,7 +338,14 @@ resource "aws_ecs_task_definition" "api" {
         {
           name  = "ENVIRONMENT"
           value = var.environment
-        }
+        },
+        { name = "APP_ENV", value = var.app_env },
+        { name = "RUST_ENV", value = var.app_env },
+        { name = "BASE_URL", value = var.base_url },
+        { name = "CORS_ALLOWED_ORIGINS", value = var.cors_allowed_origins },
+        { name = "FROM_EMAIL", value = var.from_email },
+        { name = "BLOCKCHAIN_RPC_URL", value = var.blockchain_rpc_url },
+        { name = "PREDICTIQ_CONTRACT_ID", value = var.predictiq_contract_id }
         ], var.otlp_endpoint == "" ? [] : [
         {
           name  = "OTLP_ENDPOINT"
@@ -182,7 +354,7 @@ resource "aws_ecs_task_definition" "api" {
       ])
       # All secrets are injected from AWS Secrets Manager — no plaintext
       # environment variables for sensitive values.
-      secrets = [
+      secrets = concat([
         {
           name      = "DB_HOST"
           valueFrom = aws_secretsmanager_secret.db_host.arn
@@ -204,8 +376,16 @@ resource "aws_ecs_task_definition" "api" {
           valueFrom = aws_secretsmanager_secret.db_password.arn
         },
         {
-          name      = "REDIS_URL"
-          valueFrom = aws_secretsmanager_secret.redis_url.arn
+          name      = "REDIS_HOST"
+          valueFrom = aws_secretsmanager_secret.redis_host.arn
+        },
+        {
+          name      = "REDIS_PORT"
+          valueFrom = aws_secretsmanager_secret.redis_port.arn
+        },
+        {
+          name      = "REDIS_AUTH_TOKEN"
+          valueFrom = aws_secretsmanager_secret.redis_auth_token.arn
         },
         {
           name      = "HMAC_KEY"
@@ -220,10 +400,16 @@ resource "aws_ecs_task_definition" "api" {
           valueFrom = aws_secretsmanager_secret.sendgrid_key_rotated_at.arn
         },
         {
-          name      = "API_SIGNING_KEY"
+          # The API reads this value as REQUEST_SIGNING_SECRET (no reader exists for API_SIGNING_KEY).
+          name      = "REQUEST_SIGNING_SECRET"
           valueFrom = aws_secretsmanager_secret.api_signing_key.arn
         }
-      ]
+      ], [
+        for k, v in local.extra_secrets : {
+          name      = v.env
+          valueFrom = aws_secretsmanager_secret.extra[k].arn
+        }
+      ])
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -285,12 +471,167 @@ resource "aws_security_group_rule" "ecs_tasks_ingress_alb" {
   source_security_group_id = aws_security_group.alb.id
 }
 
+# ── ALB access logs, WAF ───────────────────────────────────────────────────────
+
+data "aws_elb_service_account" "main" {}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "alb_logs" {
+  bucket        = "predictiq-${var.environment}-alb-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = var.environment != "prod"
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-alb-logs"
+  })
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  # ALB access logs only support SSE-S3 (AES256); SSE-KMS is not supported.
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "alb_logs" {
+  bucket                  = aws_s3_bucket.alb_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  rule {
+    id     = "expire-logs"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = var.environment == "prod" ? 90 : 14
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowALBLogDelivery"
+        Effect    = "Allow"
+        Principal = { AWS = data.aws_elb_service_account.main.arn }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.alb_logs.arn}/alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.alb_logs.arn, "${aws_s3_bucket.alb_logs.arn}/*"]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      }
+    ]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.alb_logs]
+}
+
+resource "aws_wafv2_web_acl" "alb" {
+  name  = "predictiq-${var.environment}-alb-waf"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "common-rules"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "known-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "predictiq-${var.environment}-alb-waf"
+    sampled_requests_enabled   = true
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-alb-waf"
+  })
+}
+
+resource "aws_wafv2_web_acl_association" "alb" {
+  resource_arn = aws_lb.main.arn
+  web_acl_arn  = aws_wafv2_web_acl.alb.arn
+}
+
 resource "aws_lb" "main" {
   name               = "predictiq-${var.environment}-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnet_ids
+
+  enable_deletion_protection = coalesce(var.alb_deletion_protection, var.environment == "prod")
+  drop_invalid_header_fields = true
+
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.id
+    prefix  = "alb"
+    enabled = true
+  }
+
+  depends_on = [aws_s3_bucket_policy.alb_logs]
 
   tags = merge(local.common_tags, {
     Name = "predictiq-${var.environment}-alb"
@@ -304,11 +645,14 @@ resource "aws_lb_target_group" "api" {
   vpc_id      = var.vpc_id
   target_type = "ip"
 
+  # Align with the app's graceful-shutdown timeout instead of the 300 s default.
+  deregistration_delay = var.shutdown_timeout_seconds
+
   health_check {
     healthy_threshold   = 2
-    unhealthy_threshold = 3
+    unhealthy_threshold = 2
     timeout             = 5
-    interval            = 60
+    interval            = 15
     path                = "/health/ready"
     matcher             = "200"
   }
@@ -359,6 +703,11 @@ resource "aws_ecs_service" "api" {
   desired_count   = var.api_desired_count
   launch_type     = "FARGATE"
 
+  # Desired count is owned by the autoscaler after the first apply.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   # Zero-downtime rolling deploy: always keep 100 % capacity during updates,
   # allow up to 200 % so new tasks start before old ones are drained.
   deployment_minimum_healthy_percent = 100
@@ -394,20 +743,53 @@ resource "aws_ecs_service" "api" {
 # ECS task via the `secrets` block above.  No plaintext secrets are passed
 # through Terraform environment variables or ECS `environment` blocks.
 
-resource "aws_secretsmanager_secret" "redis_url" {
-  name        = "predictiq/${var.environment}/redis-url"
-  description = "Redis connection URL for the predictIQ API"
+resource "aws_secretsmanager_secret" "redis_host" {
+  name       = "predictiq/${var.environment}/redis-host"
+  kms_key_id = aws_kms_key.main.arn
+  tags       = merge(local.common_tags, { Name = "predictiq-${var.environment}-redis-host" })
+}
+
+resource "aws_secretsmanager_secret_version" "redis_host" {
+  secret_id     = aws_secretsmanager_secret.redis_host.id
+  secret_string = var.redis_host
+}
+
+resource "aws_secretsmanager_secret" "redis_port" {
+  name       = "predictiq/${var.environment}/redis-port"
+  kms_key_id = aws_kms_key.main.arn
+  tags       = merge(local.common_tags, { Name = "predictiq-${var.environment}-redis-port" })
+}
+
+resource "aws_secretsmanager_secret_version" "redis_port" {
+  secret_id     = aws_secretsmanager_secret.redis_port.id
+  secret_string = tostring(var.redis_port)
+}
+
+resource "aws_secretsmanager_secret" "redis_auth_token" {
+  name        = "predictiq/${var.environment}/redis-auth-token"
+  description = "Redis AUTH token. The application assembles REDIS_URL at runtime."
+  kms_key_id  = aws_kms_key.main.arn
 
   tags = merge(local.common_tags, {
-    Name            = "predictiq-${var.environment}-redis-url"
-    SecretType      = "connection-string"
-    RotationEnabled = "false"
+    Name            = "predictiq-${var.environment}-redis-auth-token"
+    SecretType      = "credential"
+    RotationEnabled = var.secret_rotation_lambda_arn != null ? "true" : "false"
   })
 }
 
-resource "aws_secretsmanager_secret_version" "redis_url" {
-  secret_id     = aws_secretsmanager_secret.redis_url.id
-  secret_string = var.redis_url
+resource "aws_secretsmanager_secret_version" "redis_auth_token" {
+  secret_id     = aws_secretsmanager_secret.redis_auth_token.id
+  secret_string = var.redis_auth_token
+}
+
+resource "aws_secretsmanager_secret_rotation" "redis_auth_token" {
+  count               = var.secret_rotation_lambda_arn != null ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.redis_auth_token.id
+  rotation_lambda_arn = var.secret_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 30
+  }
 }
 
 # ── Database credentials (individual secrets) ────────────────────────────────
@@ -418,6 +800,7 @@ resource "aws_secretsmanager_secret_version" "redis_url" {
 # inside a secrecy::SecretString — see services/api/src/config.rs.
 
 resource "aws_secretsmanager_secret" "db_host" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-host"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-host" })
 }
@@ -428,6 +811,7 @@ resource "aws_secretsmanager_secret_version" "db_host" {
 }
 
 resource "aws_secretsmanager_secret" "db_port" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-port"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-port" })
 }
@@ -438,6 +822,7 @@ resource "aws_secretsmanager_secret_version" "db_port" {
 }
 
 resource "aws_secretsmanager_secret" "db_name" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-name"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-name" })
 }
@@ -448,6 +833,7 @@ resource "aws_secretsmanager_secret_version" "db_name" {
 }
 
 resource "aws_secretsmanager_secret" "db_user" {
+  kms_key_id = aws_kms_key.main.arn
   name = "predictiq/${var.environment}/db-user"
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-user" })
 }
@@ -458,9 +844,20 @@ resource "aws_secretsmanager_secret_version" "db_user" {
 }
 
 resource "aws_secretsmanager_secret" "db_password" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/db-password"
   description = "PostgreSQL password for the predictIQ application user. Never assembled into DATABASE_URL."
   tags = merge(local.common_tags, { Name = "predictiq-${var.environment}-db-password" })
+}
+
+resource "aws_secretsmanager_secret_rotation" "db_password" {
+  count               = var.secret_rotation_lambda_arn != null ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.db_password.id
+  rotation_lambda_arn = var.secret_rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = 30
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "db_password" {
@@ -471,6 +868,7 @@ resource "aws_secretsmanager_secret_version" "db_password" {
 # ── SendGrid ────────────────────────────────────────────────────────────────
 
 resource "aws_secretsmanager_secret" "hmac_key" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/hmac-key"
   description = "HMAC secret key used to sign API payloads and webhook signatures"
 
@@ -488,6 +886,7 @@ resource "aws_secretsmanager_secret_version" "hmac_key" {
 }
 
 resource "aws_secretsmanager_secret" "sendgrid_api_key" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/sendgrid-api-key"
   description = "SendGrid API key used by the predictIQ API for transactional email. Rotate every 90 days — see docs/runbooks/sendgrid-api-key-rotation.md."
 
@@ -507,6 +906,7 @@ resource "aws_secretsmanager_secret_version" "sendgrid_api_key" {
 # Stores only the rotation date (YYYY-MM-DD string) — not the key itself.
 # The application reads this at startup to warn if the key is older than 90 days.
 resource "aws_secretsmanager_secret" "sendgrid_key_rotated_at" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/sendgrid-key-rotated-at"
   description = "ISO-8601 date (YYYY-MM-DD) when SENDGRID_API_KEY was last rotated. Update this alongside the key itself."
 
@@ -524,6 +924,7 @@ resource "aws_secretsmanager_secret_version" "sendgrid_key_rotated_at" {
 }
 
 resource "aws_secretsmanager_secret" "api_signing_key" {
+  kms_key_id = aws_kms_key.main.arn
   name        = "predictiq/${var.environment}/api-signing-key"
   description = "Private key used to sign API responses"
 
@@ -533,6 +934,22 @@ resource "aws_secretsmanager_secret" "api_signing_key" {
     RotationEnabled = "true"
     RotationSchedule = "90-days"
   })
+}
+
+resource "aws_secretsmanager_secret" "extra" {
+  for_each    = local.extra_secrets
+  name        = "predictiq/${var.environment}/${replace(each.key, "_", "-")}"
+  description = "Injected into the API task as ${each.value.env}"
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-${replace(each.key, "_", "-")}"
+  })
+}
+
+resource "aws_secretsmanager_secret_version" "extra" {
+  for_each      = local.extra_secrets
+  secret_id     = aws_secretsmanager_secret.extra[each.key].id
+  secret_string = each.value.value
 }
 
 resource "aws_secretsmanager_secret_version" "api_signing_key" {
@@ -582,18 +999,25 @@ resource "aws_iam_role_policy" "ecs_task_execution_secrets" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
-        Resource = [
+        Resource = concat([
           aws_secretsmanager_secret.db_host.arn,
           aws_secretsmanager_secret.db_port.arn,
           aws_secretsmanager_secret.db_name.arn,
           aws_secretsmanager_secret.db_user.arn,
           aws_secretsmanager_secret.db_password.arn,
-          aws_secretsmanager_secret.redis_url.arn,
+          aws_secretsmanager_secret.redis_host.arn,
+          aws_secretsmanager_secret.redis_port.arn,
+          aws_secretsmanager_secret.redis_auth_token.arn,
           aws_secretsmanager_secret.hmac_key.arn,
           aws_secretsmanager_secret.sendgrid_api_key.arn,
           aws_secretsmanager_secret.sendgrid_key_rotated_at.arn,
           aws_secretsmanager_secret.api_signing_key.arn,
-        ]
+        ], [for s in aws_secretsmanager_secret.extra : s.arn])
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = [aws_kms_key.main.arn]
       }
     ]
   })
@@ -622,9 +1046,62 @@ resource "aws_iam_role" "ecs_task_role" {
   })
 }
 
+# ── Autoscaling ────────────────────────────────────────────────────────────────
+
+resource "aws_appautoscaling_target" "api" {
+  service_namespace  = "ecs"
+  scalable_dimension = "ecs:service:DesiredCount"
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.api.name}"
+  min_capacity       = var.api_min_count
+  max_capacity       = var.api_max_count
+}
+
+resource "aws_appautoscaling_policy" "api_cpu" {
+  name               = "predictiq-${var.environment}-api-cpu-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
+  resource_id        = aws_appautoscaling_target.api.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.autoscaling_cpu_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+
+resource "aws_appautoscaling_policy" "api_requests" {
+  name               = "predictiq-${var.environment}-api-requests-target"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.api.service_namespace
+  scalable_dimension = aws_appautoscaling_target.api.scalable_dimension
+  resource_id        = aws_appautoscaling_target.api.resource_id
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = var.autoscaling_requests_per_target
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.main.arn_suffix}/${aws_lb_target_group.api.arn_suffix}"
+    }
+  }
+}
+
 # ── Data sources / Outputs ─────────────────────────────────────────────────────
 
 data "aws_region" "current" {}
+
+data "aws_caller_identity" "current" {}
+
+output "kms_key_arn" {
+  value = aws_kms_key.main.arn
+}
 
 output "cluster_name" {
   value = aws_ecs_cluster.main.name
@@ -632,6 +1109,14 @@ output "cluster_name" {
 
 output "service_name" {
   value = aws_ecs_service.api.name
+}
+
+output "alb_arn_suffix" {
+  value = aws_lb.main.arn_suffix
+}
+
+output "target_group_arn_suffix" {
+  value = aws_lb_target_group.api.arn_suffix
 }
 
 output "alb_dns_name" {
@@ -647,7 +1132,9 @@ output "secret_arns" {
     db_name          = aws_secretsmanager_secret.db_name.arn
     db_user          = aws_secretsmanager_secret.db_user.arn
     db_password      = aws_secretsmanager_secret.db_password.arn
-    redis_url        = aws_secretsmanager_secret.redis_url.arn
+    redis_host       = aws_secretsmanager_secret.redis_host.arn
+    redis_port       = aws_secretsmanager_secret.redis_port.arn
+    redis_auth_token = aws_secretsmanager_secret.redis_auth_token.arn
     hmac_key         = aws_secretsmanager_secret.hmac_key.arn
     sendgrid_api_key = aws_secretsmanager_secret.sendgrid_api_key.arn
     api_signing_key  = aws_secretsmanager_secret.api_signing_key.arn

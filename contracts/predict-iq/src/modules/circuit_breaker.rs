@@ -134,11 +134,10 @@ pub fn unpause(e: &Env) -> Result<(), ErrorCode> {
     _set_state_internal(e, CircuitBreakerState::Closed)
 }
 
+/// Issue #1705: Open and Paused block high-risk operations; HalfOpen admits a
+/// limited number of probe operations (counted via `require_closed`).
 pub fn require_not_paused_for_high_risk(e: &Env) -> Result<(), ErrorCode> {
-    if get_state(e) == CircuitBreakerState::Paused {
-        return Err(ErrorCode::ContractPaused);
-    }
-    Ok(())
+    require_closed(e)
 }
 
 /// Governance: update the circuit breaker threshold (admin only).
@@ -290,3 +289,37 @@ mod threshold_tests {
         set_threshold(&e, 1).unwrap();
         assert_eq!(get_threshold(&e), 1);
     }
+
+#[cfg(test)]
+mod high_risk_gate_tests {
+    use super::*;
+
+    fn with_contract<F: FnOnce(&Env)>(f: F) {
+        let e = Env::default();
+        let id = e.register(crate::PredictIQ, ());
+        e.as_contract(&id, || f(&e));
+    }
+
+    /// Issue #1705: Open blocks high-risk ops; HalfOpen probes are counted and
+    /// trip back to Open once the limit is reached.
+    #[test]
+    fn open_blocks_and_half_open_probes_are_counted() {
+        with_contract(|e| {
+            _set_state_internal(e, CircuitBreakerState::Open).unwrap();
+            assert_eq!(
+                require_not_paused_for_high_risk(e),
+                Err(ErrorCode::ContractPaused)
+            );
+
+            _set_state_internal(e, CircuitBreakerState::HalfOpen).unwrap();
+            for _ in 0..HALF_OPEN_MAX_OPS {
+                assert_eq!(require_not_paused_for_high_risk(e), Ok(()));
+            }
+            assert_eq!(
+                require_not_paused_for_high_risk(e),
+                Err(ErrorCode::ContractPaused)
+            );
+            assert_eq!(get_state(e), CircuitBreakerState::Open);
+        });
+    }
+}

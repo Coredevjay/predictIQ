@@ -15,7 +15,13 @@ outputs, or version control.
 | `redis-url` | `predictiq/<env>/redis-url` | `REDIS_URL` | Connection string | Manual |
 | `hmac-key` | `predictiq/<env>/hmac-key` | `HMAC_KEY` | 32+ byte random hex | **Every 90 days** |
 | `sendgrid-api-key` | `predictiq/<env>/sendgrid-api-key` | `SENDGRID_API_KEY` | SendGrid API key (`SG.*`) | **Every 180 days** |
-| `api-signing-key` | `predictiq/<env>/api-signing-key` | `API_SIGNING_KEY` | 32+ byte random hex | **Every 90 days** |
+| `api-signing-key` | `predictiq/<env>/api-signing-key` | `REQUEST_SIGNING_SECRET` | 32+ byte random hex | **Every 90 days** |
+| `api-keys` | `predictiq/<env>/api-keys` | `API_KEYS` | Comma-separated keys | Manual |
+| `unsubscribe-signing-secret` | `predictiq/<env>/unsubscribe-signing-secret` | `UNSUBSCRIBE_SIGNING_SECRET` | Random hex | Manual |
+| `sendgrid-webhook-secret` | `predictiq/<env>/sendgrid-webhook-secret` | `SENDGRID_WEBHOOK_SECRET` | SendGrid webhook secret | Manual |
+| `email-idempotency-secret` | `predictiq/<env>/email-idempotency-secret` | `EMAIL_IDEMPOTENCY_SECRET` | Random hex | Manual |
+
+Non-secret settings (`APP_ENV`, `RUST_ENV`, `BASE_URL`, `CORS_ALLOWED_ORIGINS`, `FROM_EMAIL`, `BLOCKCHAIN_RPC_URL`, `PREDICTIQ_CONTRACT_ID`) are plain ECS environment variables set from Terraform variables. `APP_ENV` must be `development`, `staging` or `production`; the API refuses to start otherwise.
 
 `<env>` is one of `dev`, `staging`, or `prod`.
 

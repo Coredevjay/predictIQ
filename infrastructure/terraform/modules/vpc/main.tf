@@ -146,6 +146,107 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
+# ── VPC endpoints (keep AWS control-plane traffic off the NAT gateways) ────────
+
+data "aws_region" "current" {}
+
+resource "aws_security_group" "vpc_endpoints" {
+  name   = "predictiq-${var.environment}-vpce-sg"
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.cidr_block]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-vpce-sg"
+  })
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = aws_route_table.private[*].id
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-vpce-s3"
+  })
+}
+
+resource "aws_vpc_endpoint" "interface" {
+  for_each = toset(["ecr.api", "ecr.dkr", "logs", "secretsmanager"])
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.key}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-vpce-${each.key}"
+  })
+}
+
+# ── VPC flow logs ──────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_log_group" "flow_logs" {
+  name              = "/vpc/predictiq-${var.environment}/flow-logs"
+  retention_in_days = var.environment == "prod" ? 90 : 14
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-vpc-flow-logs"
+  })
+}
+
+resource "aws_iam_role" "flow_logs" {
+  name = "predictiq-${var.environment}-vpc-flow-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "vpc-flow-logs.amazonaws.com" }
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "flow_logs" {
+  name = "predictiq-${var.environment}-vpc-flow-logs-policy"
+  role = aws_iam_role.flow_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ]
+      Resource = "${aws_cloudwatch_log_group.flow_logs.arn}:*"
+    }]
+  })
+}
+
+resource "aws_flow_log" "main" {
+  vpc_id          = aws_vpc.main.id
+  traffic_type    = "ALL"
+  log_destination = aws_cloudwatch_log_group.flow_logs.arn
+  iam_role_arn    = aws_iam_role.flow_logs.arn
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-vpc-flow-log"
+  })
+}
+
 data "aws_availability_zones" "available" {
   state = "available"
 }

@@ -825,6 +825,8 @@ impl Database {
     ///
     /// Returns an error if the market does not exist or is not in `active` status.
     pub async fn resolve_market(&self, market_id: i64, outcome_index: u32) -> anyhow::Result<()> {
+        let outcome_index = i32::try_from(outcome_index)
+            .map_err(|_| anyhow::anyhow!("outcome_index {outcome_index} out of range"))?;
         let rows_affected = self
             .with_timeout(
                 "resolve_market",
@@ -833,7 +835,33 @@ impl Database {
                      SET status = 'resolved', outcome_index = $1, resolved_at = NOW() \
                      WHERE id = $2 AND status = 'active' AND deleted_at IS NULL",
                 )
-                .bind(outcome_index as i32)
+                .bind(outcome_index)
+                .bind(market_id)
+                .execute(&self.pool),
+            )
+            .await
+            .map_err(anyhow::Error::from)?
+            .rows_affected();
+
+        if rows_affected == 0 {
+            anyhow::bail!("market {market_id} not found or not in active status");
+        }
+
+        Ok(())
+    }
+
+    /// Cancel a market by setting its status to `cancelled`.
+    ///
+    /// Returns an error if the market does not exist or is not in `active` status.
+    pub async fn cancel_market(&self, market_id: i64) -> anyhow::Result<()> {
+        let rows_affected = self
+            .with_timeout(
+                "cancel_market",
+                sqlx::query(
+                    "UPDATE markets \
+                     SET status = 'cancelled' \
+                     WHERE id = $1 AND status = 'active' AND deleted_at IS NULL",
+                )
                 .bind(market_id)
                 .execute(&self.pool),
             )
@@ -1041,6 +1069,17 @@ impl Database {
         )
         .bind(expires_at)
         .bind(key_hash)
+        .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Revoke an active API key by id. Returns `true` if a key was revoked.
+    pub async fn api_key_revoke(&self, id: uuid::Uuid) -> anyhow::Result<bool> {
+        let result = self.with_timeout("api_key_revoke", sqlx::query(
+            "UPDATE api_keys SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
         .execute(&self.pool)).await.map_err(anyhow::Error::from)?;
 
         Ok(result.rows_affected() > 0)

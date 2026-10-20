@@ -99,6 +99,20 @@ fn hmac_key_entropy(data: &[u8]) -> f64 {
         .sum()
 }
 
+/// Known `APP_ENV` values. Startup fails for anything else so a typo (or a
+/// mismatched variable name in the deployment) cannot silently disable
+/// production safety checks.
+pub fn validate_app_env(value: &str) -> Result<(), String> {
+    const KNOWN: [&str; 3] = ["development", "staging", "production"];
+    if KNOWN.iter().any(|k| k.eq_ignore_ascii_case(value)) {
+        Ok(())
+    } else {
+        Err(format!(
+            "APP_ENV={value:?} is not a known environment (expected one of {KNOWN:?})"
+        ))
+    }
+}
+
 // ── CORS configuration ────────────────────────────────────────────────────────
 
 /// CORS policy loaded from environment variables.
@@ -469,8 +483,7 @@ impl Config {
 
         Self {
             bind_addr,
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            redis_url: redis_url_from_env(),
             db_credentials,
             database_url,
             hmac_key: env::var("HMAC_KEY").unwrap_or_default(),
@@ -643,7 +656,13 @@ impl Config {
             is_production: env::var("APP_ENV")
                 .map(|v| v.eq_ignore_ascii_case("production"))
                 .unwrap_or(false),
-            app_env: env::var("APP_ENV").unwrap_or_else(|_| "development".to_string()),
+            app_env: {
+                let value = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+                if let Err(msg) = validate_app_env(&value) {
+                    panic!("{msg}");
+                }
+                value
+            },
             require_https: env::var("REQUIRE_HTTPS")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false),
@@ -1122,6 +1141,14 @@ impl ContractKeySchema {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validate_app_env_rejects_unknown_values() {
+        assert!(super::validate_app_env("production").is_ok());
+        assert!(super::validate_app_env("Staging").is_ok());
+        assert!(super::validate_app_env("prod").is_err());
+        assert!(super::validate_app_env("").is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -2242,5 +2269,49 @@ mod tests {
         };
 
         assert!(schema.validate().is_ok());
+    }
+}
+
+/// Percent-encode a URL userinfo component (RFC 3986 unreserved chars kept).
+fn percent_encode_userinfo(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{:02X}", b),
+        })
+        .collect()
+}
+
+/// Resolve the Redis URL: `REDIS_URL` wins; otherwise assemble it at runtime
+/// from `REDIS_HOST`/`REDIS_PORT`/`REDIS_AUTH_TOKEN` (injected from Secrets
+/// Manager) so the credential-bearing URL never lands in Terraform state.
+fn redis_url_from_env() -> String {
+    if let Ok(url) = env::var("REDIS_URL") {
+        return url;
+    }
+    match env::var("REDIS_HOST") {
+        Ok(host) if !host.is_empty() => {
+            let port = env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
+            let auth = env::var("REDIS_AUTH_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .map(|t| format!(":{}@", percent_encode_userinfo(&t)))
+                .unwrap_or_default();
+            format!("rediss://{auth}{host}:{port}")
+        }
+        _ => "redis://127.0.0.1:6379".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod redis_url_tests {
+    use super::percent_encode_userinfo;
+
+    #[test]
+    fn encodes_reserved_chars() {
+        assert_eq!(percent_encode_userinfo("a:b@c/d"), "a%3Ab%40c%2Fd");
+        assert_eq!(percent_encode_userinfo("Az09-._~"), "Az09-._~");
     }
 }

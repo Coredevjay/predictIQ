@@ -149,6 +149,8 @@ See `environments/README.md` for detailed environment management instructions.
 - Configurable CIDR blocks
 - Public and private subnets
 - NAT Gateway for private subnet egress
+- Gateway endpoint (S3) and interface endpoints (ECR api/dkr, CloudWatch Logs, Secrets Manager) so AWS service traffic bypasses NAT
+- VPC flow logs (all traffic) to CloudWatch Logs
 
 ### RDS Module
 - PostgreSQL database
@@ -163,10 +165,13 @@ See `environments/README.md` for detailed environment management instructions.
 - **Failover RTO**: AWS promotes a read replica to primary in approximately **60–120 seconds**. During this window, write operations will fail; read-only operations served by replicas remain available. Applications should implement retry logic with exponential backoff (recommended: 3 retries, starting at 200 ms) to handle the failover window gracefully.
 - At-rest and in-transit encryption enabled
 - Subnet group for VPC placement
+- Daily snapshots (`snapshot_retention_limit` = 7 days, window 01:00-02:00 UTC) and `auto_minor_version_upgrade`
+- Parameter group family is derived from `redis_engine_version` (e.g. `7.0` -> `default.redis7`, `6.2` -> `default.redis6.x`)
 
 ### ECS Module
 - Fargate launch type
-- Application Load Balancer
+- Application Load Balancer with access logs (encrypted S3 bucket), `drop_invalid_header_fields`, deletion protection in prod, and an AWS managed-rules WAF (Common + Known Bad Inputs)
+- Container health check on `/health/live` (15 s interval, 2 retries); target group probes every 15 s with `unhealthy_threshold = 2`; `stopTimeout` and `deregistration_delay` follow `shutdown_timeout_seconds` (default 30, matching `SHUTDOWN_TIMEOUT_SECS`)
 - Auto-scaling policies
 - CloudWatch logging
 
@@ -273,3 +278,11 @@ For infrastructure issues:
 - [Terraform Documentation](https://www.terraform.io/docs)
 - [AWS Provider Documentation](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
 - [PredictIQ Architecture](../docs/ARCHITECTURE.md)
+
+## Redis TLS, alarms and autoscaling
+
+- ElastiCache enforces in-transit encryption; the module emits a `rediss://` URL and the API's `redis` crate is built with `tokio-rustls-comp`.
+- CloudWatch ALB alarms/dashboard use `aws_lb.main.arn_suffix` (passed into the monitoring module), not a wildcard.
+- Alarms cover ECS CPU/memory/running tasks, ALB 5xx/latency/unhealthy hosts, RDS CPU/storage/connections and Redis memory/evictions/replication lag; each description links its runbook in `docs/runbooks/`.
+- The ECS service autoscales on CPU and ALB request count per target between `api_min_count` and `api_max_count`.
+- `infrastructure/terraform/tests/check_invariants.sh` (run in the Terraform CI workflow) guards these.

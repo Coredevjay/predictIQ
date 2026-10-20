@@ -37,6 +37,7 @@ FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -46,24 +47,8 @@ EXPOSE 8080
 
 USER nobody
 
-ENTRYPOINT ["predictiq-api"]
-
-RUN cargo build --release --manifest-path services/api/Cargo.toml
-
-# ---------- Runtime stage ----------
-FROM debian:bookworm-slim AS runtime
-
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY --from=builder /usr/src/app/services/api/target/release/predictiq-api /usr/local/bin/predictiq-api
-
-EXPOSE 8080
-
-USER nobody
+# Built-in probe (no curl in the image); hits the lightweight liveness endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["predictiq-api", "healthcheck"]
 
 ENTRYPOINT ["predictiq-api"]

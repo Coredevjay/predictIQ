@@ -91,7 +91,7 @@ fn create_test_market(
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(e),
-        feed_id: String::from_str(e, "test_feed"),
+        feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -128,7 +128,7 @@ fn make_stored_market(e: &Env, id: u64) -> types::Market {
         winning_outcome: None,
         oracle_config: types::OracleConfig {
             oracle_address: Address::generate(e),
-            feed_id: String::from_str(e, "seeded_feed"),
+            feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -176,7 +176,7 @@ fn test_market_creation_fails_without_deposit() {
         &2000,
         &types::OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: 1,
             max_staleness_seconds: 300,
             max_confidence_bps: 200,
@@ -279,7 +279,7 @@ fn test_market_id_overflow_returns_error() {
         &2000,
         &types::OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "overflow_feed"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
         },
         &types::MarketTier::Basic,
@@ -319,7 +319,7 @@ fn test_market_id_collision_returns_error() {
         &2000,
         &types::OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "collision_feed"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
         },
         &types::MarketTier::Basic,
@@ -1389,7 +1389,7 @@ fn test_create_conditional_market_parent_not_resolved() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1447,7 +1447,7 @@ fn test_create_conditional_market_parent_wrong_outcome() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1505,7 +1505,7 @@ fn test_create_conditional_market_success() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1572,7 +1572,7 @@ fn test_place_bet_on_conditional_market_parent_not_resolved() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1639,7 +1639,7 @@ fn test_place_bet_on_conditional_market_parent_wrong_outcome() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1727,7 +1727,7 @@ fn test_multi_level_conditional_markets() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1803,7 +1803,7 @@ fn test_create_conditional_market_invalid_parent_outcome_idx() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: 1,
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -1859,7 +1859,7 @@ fn test_create_market_with_255_outcomes_is_rejected() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
     };
 
@@ -1893,7 +1893,7 @@ fn test_create_market_at_max_outcomes_succeeds() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
     };
 
@@ -1926,7 +1926,7 @@ fn test_create_market_one_above_max_outcomes_is_rejected() {
 
     let oracle_config = types::OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
     };
 
@@ -2074,7 +2074,7 @@ fn test_voting_works_with_optimized_vote_struct() {
         &resolution_deadline,
         &types::OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
         },
         &types::MarketTier::Basic,
@@ -2142,7 +2142,7 @@ fn test_double_vote_still_rejected_with_optimized_struct() {
         &resolution_deadline,
         &types::OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
         },
         &types::MarketTier::Basic,
@@ -2199,7 +2199,7 @@ fn test_dispute_deadline_extension_is_one_time_and_idempotent() {
         &resolution_deadline,
         &types::OracleConfig {
             oracle_address: Address::generate(&e),
-            feed_id: String::from_str(&e, "test"),
+            feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
             max_staleness_seconds: 3600,
             max_confidence_bps: 200,
@@ -2594,7 +2594,7 @@ mod dispute_resolution_tests {
             &2000,
             &OracleConfig {
                 oracle_address: Address::generate(env),
-                feed_id: String::from_str(env, "feed"),
+                feed_id: String::from_str(env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
                 min_responses: Some(1),
                 max_staleness_seconds: 3600,
                 max_confidence_bps: 200,
