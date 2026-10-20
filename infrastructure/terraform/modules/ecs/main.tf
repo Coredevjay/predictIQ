@@ -214,6 +214,18 @@ variable "ecs_tasks_sg_id" {
   description = "Security group ID of the ECS tasks (managed at root level)"
 }
 
+variable "shutdown_timeout_seconds" {
+  type        = number
+  default     = 30
+  description = "App graceful-shutdown timeout (SHUTDOWN_TIMEOUT_SECS). Drives ECS stopTimeout and ALB deregistration delay."
+}
+
+variable "alb_deletion_protection" {
+  type        = bool
+  default     = null
+  description = "Enable ALB deletion protection. Defaults to true in prod, false elsewhere."
+}
+
 locals {
   extra_secrets = {
     api_keys                   = { env = "API_KEYS", value = var.api_keys }
@@ -307,6 +319,14 @@ resource "aws_ecs_task_definition" "api" {
       name      = "api"
       image     = var.api_image_uri
       essential = true
+      stopTimeout = var.shutdown_timeout_seconds
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -fsS http://localhost:${var.api_container_port}/health/live || exit 1"]
+        interval    = 15
+        timeout     = 5
+        retries     = 2
+        startPeriod = 30
+      }
       portMappings = [
         {
           containerPort = var.api_container_port
@@ -451,12 +471,167 @@ resource "aws_security_group_rule" "ecs_tasks_ingress_alb" {
   source_security_group_id = aws_security_group.alb.id
 }
 
+# ── ALB access logs, WAF ───────────────────────────────────────────────────────
+
+data "aws_elb_service_account" "main" {}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket" "alb_logs" {
+  bucket        = "predictiq-${var.environment}-alb-logs-${data.aws_caller_identity.current.account_id}"
+  force_destroy = var.environment != "prod"
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-alb-logs"
+  })
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  # ALB access logs only support SSE-S3 (AES256); SSE-KMS is not supported.
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "alb_logs" {
+  bucket                  = aws_s3_bucket.alb_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  rule {
+    id     = "expire-logs"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = var.environment == "prod" ? 90 : 14
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "alb_logs" {
+  bucket = aws_s3_bucket.alb_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowALBLogDelivery"
+        Effect    = "Allow"
+        Principal = { AWS = data.aws_elb_service_account.main.arn }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.alb_logs.arn}/alb/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.alb_logs.arn, "${aws_s3_bucket.alb_logs.arn}/*"]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      }
+    ]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.alb_logs]
+}
+
+resource "aws_wafv2_web_acl" "alb" {
+  name  = "predictiq-${var.environment}-alb-waf"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "common-rules"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  rule {
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "known-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "predictiq-${var.environment}-alb-waf"
+    sampled_requests_enabled   = true
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "predictiq-${var.environment}-alb-waf"
+  })
+}
+
+resource "aws_wafv2_web_acl_association" "alb" {
+  resource_arn = aws_lb.main.arn
+  web_acl_arn  = aws_wafv2_web_acl.alb.arn
+}
+
 resource "aws_lb" "main" {
   name               = "predictiq-${var.environment}-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.public_subnet_ids
+
+  enable_deletion_protection = coalesce(var.alb_deletion_protection, var.environment == "prod")
+  drop_invalid_header_fields = true
+
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.id
+    prefix  = "alb"
+    enabled = true
+  }
+
+  depends_on = [aws_s3_bucket_policy.alb_logs]
 
   tags = merge(local.common_tags, {
     Name = "predictiq-${var.environment}-alb"
@@ -470,11 +645,14 @@ resource "aws_lb_target_group" "api" {
   vpc_id      = var.vpc_id
   target_type = "ip"
 
+  # Align with the app's graceful-shutdown timeout instead of the 300 s default.
+  deregistration_delay = var.shutdown_timeout_seconds
+
   health_check {
     healthy_threshold   = 2
-    unhealthy_threshold = 3
+    unhealthy_threshold = 2
     timeout             = 5
-    interval            = 60
+    interval            = 15
     path                = "/health/ready"
     matcher             = "200"
   }
