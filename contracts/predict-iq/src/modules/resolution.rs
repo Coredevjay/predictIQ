@@ -96,7 +96,13 @@ pub fn attempt_oracle_resolution(e: &Env, market_id: u64) -> Result<(), ErrorCod
     oracles::validate_oracle_staleness(e, market_id, &market.oracle_config)?;
 
     // Attempt oracle resolution
-    if let Some(oracle_outcome) = oracles::get_oracle_result(e, market_id, 0) {
+    // Issue #1707: multi-oracle markets resolve via consensus, not just index 0.
+    let oracle_result = if market.oracle_config.min_responses.unwrap_or(1) > 1 {
+        oracles::validate_consensus(e, market_id, &market.oracle_config).ok()
+    } else {
+        oracles::get_oracle_result(e, market_id, 0)
+    };
+    if let Some(oracle_outcome) = oracle_result {
         // Issue #1698: reject a resolution whose winning outcome has no stake,
         // otherwise the whole pool would be permanently locked (claim_winnings
         // returns NoWinnings to everyone and there is no refund path).

@@ -308,6 +308,44 @@ impl PredictIQ {
         crate::modules::admin::get_guardian(&e)
     }
 
+    pub fn get_circuit_breaker_state(e: Env) -> CircuitBreakerState {
+        crate::modules::circuit_breaker::get_state(&e)
+    }
+
+    pub fn get_bet(
+        e: Env,
+        market_id: u64,
+        bettor: Address,
+        outcome: u32,
+    ) -> Option<crate::types::Bet> {
+        crate::modules::bets::get_bet(&e, market_id, bettor, outcome)
+    }
+
+    pub fn unlock_tokens(e: Env, voter: Address, market_id: u64) -> Result<(), ErrorCode> {
+        crate::modules::voting::unlock_tokens(&e, voter, market_id)
+    }
+
+    pub fn get_markets(e: Env, offset: u32, limit: u32) -> Vec<crate::types::Market> {
+        crate::modules::queries::get_markets(&e, offset, limit)
+    }
+
+    pub fn get_markets_by_status(
+        e: Env,
+        status: crate::types::MarketStatus,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<crate::types::Market> {
+        crate::modules::queries::get_markets_by_status(&e, status, offset, limit)
+    }
+
+    pub fn get_guardians_paginated(
+        e: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<crate::types::Guardian> {
+        crate::modules::queries::get_guardians_paginated(&e, offset, limit)
+    }
+
     pub fn pause(e: Env) -> Result<(), ErrorCode> {
         crate::modules::circuit_breaker::pause(&e)
     }
