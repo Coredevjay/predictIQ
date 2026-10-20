@@ -114,6 +114,12 @@ describe('API client paths match schema.d.ts (contract test, #3)', () => {
       params: { market_id: '42' },
       call: () => adminApi.resolveMarket('42'),
     },
+    {
+      name: 'cancelMarket',
+      template: '/api/v1/markets/{market_id}/cancel',
+      params: { market_id: '42' },
+      call: () => adminApi.cancelMarket('42'),
+    },
   ];
 
   it('every path used by the client is declared in schema.d.ts', () => {

@@ -117,6 +117,12 @@ mod tests {
                 .find_map(|s| s.parse::<i64>().ok())
                 .map(|id| id.to_string());
             ("resolve_market".to_string(), "market".to_string(), market_id)
+        } else if path.contains("/markets/") && path.contains("/cancel") {
+            let market_id = path
+                .split('/')
+                .find_map(|s| s.parse::<i64>().ok())
+                .map(|id| id.to_string());
+            ("cancel_market".to_string(), "market".to_string(), market_id)
         } else if path.contains("/audit/logs") {
             ("query_audit_logs".to_string(), "audit_log".to_string(), None)
         } else {

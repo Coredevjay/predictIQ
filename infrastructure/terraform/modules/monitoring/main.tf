@@ -42,6 +42,18 @@ variable "alb_latency_seconds" {
   default = 1
 }
 
+variable "alert_email_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "Email addresses subscribed to the alerts SNS topic."
+}
+
+variable "alert_https_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "HTTPS endpoints (PagerDuty/Slack/webhook) subscribed to the alerts SNS topic."
+}
+
 locals {
   common_tags = {
     Project   = "predictiq"
@@ -96,6 +108,20 @@ resource "aws_sns_topic" "alerts" {
       Name = "predictiq-${var.environment}-alerts"
     }
   )
+}
+
+resource "aws_sns_topic_subscription" "email" {
+  for_each  = toset(var.alert_email_endpoints)
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = each.value
+}
+
+resource "aws_sns_topic_subscription" "https" {
+  for_each  = toset(var.alert_https_endpoints)
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "https"
+  endpoint  = each.value
 }
 
 resource "aws_cloudwatch_metric_alarm" "ecs_cpu" {

@@ -63,7 +63,7 @@ fn test_pause_blocks_operations() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -106,7 +106,7 @@ fn test_unpause_allows_operations() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -172,7 +172,7 @@ fn test_require_closed_when_open() {
 
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -235,7 +235,7 @@ fn test_auto_recovery_open_to_half_open_after_cooldown() {
     );
     let oracle_config = OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps: 100,
@@ -273,7 +273,7 @@ fn test_half_open_trips_back_to_open_after_max_ops() {
         );
         let oracle_config = OracleConfig {
             oracle_address: Address::generate(&env),
-            feed_id: String::from_str(&env, "test"),
+            feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
             min_responses: Some(1),
             max_staleness_seconds: 3600,
             max_confidence_bps: 100,

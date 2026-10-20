@@ -462,13 +462,35 @@ fn check_gdpr_token(state: &AppState, email: &str, token: &str) -> Option<Respon
     None
 }
 
-fn is_disposable_email(email: &str) -> bool {
-    const DISPOSABLE_DOMAINS: &[&str] = &["mailinator.com", "tempmail.com", "guerrillamail.com"];
+/// Built-in disposable domains; extend at runtime via the comma-separated
+/// `DISPOSABLE_EMAIL_DOMAINS` env var. Subdomains of a listed domain match.
+const DISPOSABLE_DOMAINS: &[&str] = &[
+    "mailinator.com",
+    "tempmail.com",
+    "guerrillamail.com",
+    "10minutemail.com",
+    "yopmail.com",
+    "trashmail.com",
+    "throwawaymail.com",
+    "sharklasers.com",
+    "getnada.com",
+    "dispostable.com",
+];
 
-    email
-        .rsplit_once('@')
-        .map(|(_, domain)| DISPOSABLE_DOMAINS.contains(&domain))
-        .unwrap_or(false)
+fn is_disposable_email(email: &str) -> bool {
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return false;
+    };
+    let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+    let extra = std::env::var("DISPOSABLE_EMAIL_DOMAINS").unwrap_or_default();
+    DISPOSABLE_DOMAINS
+        .iter()
+        .copied()
+        .chain(extra.split(',').map(str::trim).filter(|d| !d.is_empty()))
+        .any(|d| {
+            let d = d.to_ascii_lowercase();
+            domain == d || domain.ends_with(&format!(".{d}"))
+        })
 }
 
 use crate::security::extract_client_ip_cidrs;
@@ -509,15 +531,9 @@ pub async fn newsletter_subscribe(
         }
     };
 
-    if is_disposable_email(&email) {
-        return Ok((
-            StatusCode::BAD_REQUEST,
-            Json(NewsletterResponse {
-                success: false,
-                message: "Disposable emails are not allowed.".to_string(),
-            }),
-        ));
-    }
+    // Disposable addresses get the same uniform 202 as everyone else (no
+    // enumeration of the blocklist); nothing is stored or sent.
+    let disposable = is_disposable_email(&email);
     let source = payload
         .source
         .unwrap_or_else(|| "direct".to_string())
@@ -545,7 +561,25 @@ pub async fn newsletter_subscribe(
         .map(|s| s.confirmed && s.unsubscribed_at.is_none())
         .unwrap_or(false);
 
-    if !already_active {
+    // Per-recipient cooldown: at most one confirmation email per address per hour,
+    // regardless of how many client IPs are used. Fails open if Redis is down.
+    let throttled = if already_active || disposable {
+        false
+    } else {
+        use sha2::{Digest, Sha256};
+        let key = format!(
+            "newsletter:confirm_cooldown:{}",
+            hex::encode(Sha256::digest(email.as_bytes()))
+        );
+        state
+            .cache
+            .incr_with_ttl(&key, std::time::Duration::from_secs(3600))
+            .await
+            .map(|n| n > 1)
+            .unwrap_or(false)
+    };
+
+    if !already_active && !disposable && !throttled {
         let token = Uuid::new_v4().to_string();
         state
             .db
@@ -1130,7 +1164,9 @@ pub struct InvalidationResult {
 /// Resolve a market by its ID.
 ///
 /// Workflow:
-/// 1. Fetch the current market state from the blockchain.
+/// 1. Fetch the current market state from the blockchain and reject an
+///    `outcome_index` that is out of range or differs from the on-chain
+///    winning outcome.
 /// 2. Persist the resolved outcome to the database.
 /// 3. Invalidate only the cache keys that are directly affected by this market's
 ///    resolution (specific market key, oracle result, statistics aggregates, and
@@ -1164,14 +1200,31 @@ pub async fn resolve_market(
     Path(market_id): Path<i64>,
     Json(payload): Json<ResolveMarketRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 1. Persist the resolution to the database.
+    // 1. Validate the outcome against the on-chain market state.
+    if i32::try_from(payload.outcome_index).is_err() {
+        return Err(ApiError::bad_request("outcome_index out of range"));
+    }
+    let chain = state
+        .blockchain
+        .market_data_cached(market_id)
+        .await
+        .map_err(into_api_error)?;
+    if let Some(onchain) = chain.resolved_outcome {
+        if onchain != payload.outcome_index {
+            return Err(ApiError::bad_request(
+                "outcome_index does not match the on-chain winning outcome",
+            ));
+        }
+    }
+
+    // 2. Persist the resolution to the database.
     state
         .db
         .resolve_market(market_id, payload.outcome_index)
         .await
         .map_err(into_api_error)?;
 
-    // 2. Invalidate only the keys affected by this market's resolution via tag.
+    // 3. Invalidate only the keys affected by this market's resolution via tag.
     // This is best-effort: a cache invalidation failure should not roll back the DB write.
     let tag = InvalidationTag::MarketResolved {
         market_id,
@@ -1201,6 +1254,60 @@ pub async fn resolve_market(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/markets/{market_id}/cancel",
+    tag = "markets",
+    params(
+        ("market_id" = i64, Path, description = "Market database ID"),
+    ),
+    responses(
+        (status = 200, description = "Market cancelled and cache invalidated", body = InvalidationResult),
+        (status = 400, description = "Bad request", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError),
+    ),
+    security(("api_key" = []))
+)]
+pub async fn cancel_market(
+    State(state): State<Arc<AppState>>,
+    Path(market_id): Path<i64>,
+) -> Result<impl IntoResponse, ApiError> {
+    // 1. Persist the cancellation to the database.
+    state
+        .db
+        .cancel_market(market_id)
+        .await
+        .map_err(into_api_error)?;
+
+    // 2. Invalidate only the keys affected by this market's cancellation via tag.
+    let tag = InvalidationTag::MarketCancelled {
+        market_id,
+        network: state.config.network_name().to_owned(),
+        featured_limit: state.config.featured_limit,
+    };
+
+    let (invalidated, cache_invalidated) = match state.cache.invalidate_tag(&tag).await {
+        Ok(count) => {
+            state.metrics.observe_invalidation("market_cancel", count);
+            tracing::info!(market_id, count, "market cancelled and cache invalidated");
+            (count, true)
+        }
+        Err(e) => {
+            tracing::warn!(market_id, error = %e, "cache invalidation failed after successful cancel DB write");
+            state.metrics.observe_invalidation("market_cancel", 0);
+            (0, false)
+        }
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(InvalidationResult {
+            invalidated_keys: invalidated,
+            cache_invalidated,
+        }),
+    ))
+}
+
 pub async fn metrics(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     state.db.record_pool_metrics();
     let body = state.metrics.render().map_err(into_api_error)?;
@@ -1212,6 +1319,174 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Result<impl IntoResp
         )],
         body,
     ))
+}
+
+// ── Blockchain market creation (issue #1753) ──────────────────────────────────
+
+/// Oracle configuration nested inside a market creation request.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+pub struct OracleConfigRequest {
+    /// Stellar account address of the oracle contract.
+    pub oracle_address: String,
+    /// Feed identifier used by the oracle (e.g. "BTC/USD").
+    pub feed_id: String,
+    /// Maximum age of an accepted oracle reading, in seconds.
+    pub max_staleness_seconds: u64,
+    /// Maximum confidence band accepted from the oracle, in basis points.
+    pub max_confidence_bps: u64,
+}
+
+/// Request body for `POST /api/v1/blockchain/markets`.
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
+pub struct CreateMarketRequest {
+    /// Stellar account address that will be recorded as the market creator.
+    pub creator: String,
+    /// Human-readable description of the prediction question.
+    pub description: String,
+    /// Ordered list of outcome labels (minimum 2).
+    pub options: Vec<String>,
+    /// Unix timestamp (seconds) at which the market stops accepting bets.
+    /// Must be in the future at the time of the request.
+    pub deadline: u64,
+    /// Unix timestamp (seconds) after which the oracle may resolve the market.
+    /// Must be at least `deadline + 86400` (24 h after betting closes).
+    pub resolution_deadline: u64,
+    /// Oracle configuration for automated resolution.
+    pub oracle_config: OracleConfigRequest,
+    /// Market tier: `"Basic"`, `"Pro"`, or `"Institutional"`.
+    pub tier: String,
+    /// Native token contract address used for payouts.
+    pub native_token: String,
+    /// Parent market ID for conditional markets (0 = top-level market).
+    pub parent_id: u64,
+    /// Outcome index within the parent market that activates this market.
+    pub parent_outcome_idx: u32,
+}
+
+/// Response body returned by `POST /api/v1/blockchain/markets`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct CreateMarketResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Create a new prediction market.
+///
+/// **Status: 501 Not Implemented**
+///
+/// The full market-creation flow requires wallet signing of the Stellar
+/// transaction on the client side, which has not yet been wired into the
+/// API server (tracked in issue #77).  This endpoint is registered so that
+/// clients receive a clear, actionable error instead of a 404 or 405.
+///
+/// Until #77 is resolved, callers should build and sign the `CreateMarket`
+/// contract-invocation transaction directly with the Stellar SDK and submit
+/// it via the Stellar Horizon or Soroban RPC endpoint.
+#[utoipa::path(
+    post,
+    path = "/api/v1/blockchain/markets",
+    tag = "blockchain",
+    request_body = CreateMarketRequest,
+    responses(
+        (status = 400, description = "Validation error", body = ApiError),
+        (status = 501, description = "Not yet implemented — use Stellar SDK for wallet-signed market creation", body = CreateMarketResponse),
+    )
+)]
+pub async fn create_market(
+    Json(payload): Json<CreateMarketRequest>,
+) -> impl IntoResponse {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // ── Validation ────────────────────────────────────────────────────────────
+
+    if payload.creator.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`creator` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.description.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`description` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.options.len() < 2 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`options` must contain at least 2 entries")),
+        )
+            .into_response();
+    }
+
+    if payload.oracle_config.oracle_address.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`oracle_config.oracle_address` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.oracle_config.feed_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`oracle_config.feed_id` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.native_token.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`native_token` must not be empty")),
+        )
+            .into_response();
+    }
+
+    if payload.deadline <= now_secs {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request("`deadline` must be in the future")),
+        )
+            .into_response();
+    }
+
+    if payload.resolution_deadline < payload.deadline + 86_400 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError::bad_request(
+                "`resolution_deadline` must be at least `deadline + 86400` (24 h after betting closes)",
+            )),
+        )
+            .into_response();
+    }
+
+    // ── Not yet implemented ───────────────────────────────────────────────────
+    // Full market creation requires the caller to sign the Stellar transaction
+    // with their private key.  The API server does not hold user private keys,
+    // so this path cannot be completed server-side until the wallet-signing
+    // integration tracked in issue #77 is implemented.
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(CreateMarketResponse {
+            success: false,
+            message: "Market creation via API is not yet implemented. \
+                Direct contract invocation requires wallet signing, which must be \
+                performed client-side using the Stellar SDK. \
+                See issue #77 for the planned implementation."
+                .to_string(),
+        }),
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -1300,6 +1575,9 @@ pub async fn blockchain_user_bets(
     Path(user): Path<String>,
     Query(query): Query<PaginationQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if !is_valid_stellar_public_key(&user) {
+        return Err(ApiError::bad_request("invalid Stellar public key"));
+    }
     let page_size = query.limit();
     // cursor encodes the page number (0-based).
     // Clamp to a sane maximum before any arithmetic to prevent overflow:
@@ -1382,6 +1660,10 @@ pub async fn blockchain_tx_status(
     Path(tx_hash): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     use crate::blockchain::WatchTxError;
+
+    if tx_hash.len() != 64 || !tx_hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request("tx_hash must be a 64-character hex string"));
+    }
 
     match state.blockchain.watch_transaction(&tx_hash).await {
         Ok(()) => {}
@@ -1848,57 +2130,48 @@ pub async fn rotate_api_key(
 ) -> Result<impl IntoResponse, ApiError> {
     use sha2::{Digest, Sha256};
 
-    let overlap_days = body.overlap_days.unwrap_or(7).max(1) as i64;
+    let overlap_days = body.overlap_days.unwrap_or(7).clamp(1, 90) as i64;
 
-    // Generate a new cryptographically random key (256-bit hex string).
+    // Generate a new key from 32 bytes of OS randomness (256-bit hex string).
     let new_raw_key = {
-        use std::fmt::Write;
-        let bytes = uuid::Uuid::new_v4().as_bytes().to_vec();
-        let bytes2 = uuid::Uuid::new_v4().as_bytes().to_vec();
-        let combined: Vec<u8> = bytes.into_iter().chain(bytes2).collect();
-        let mut s = String::with_capacity(combined.len() * 2);
-        for b in &combined {
-            write!(s, "{:02x}", b).unwrap();
-        }
-        s
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        hex::encode(bytes)
     };
     let new_hash = hex::encode(Sha256::digest(new_raw_key.as_bytes()));
 
-    // Find any existing active key(s) with the same label and schedule their expiry.
-    let active_keys = state
-        .db
-        .api_key_list_active()
-        .await
-        .map_err(into_api_error)?;
-
-    let mut old_expires_at: Option<chrono::DateTime<chrono::Utc>> = None;
-    let mut old_label: Option<String> = None;
-
     let expires_at = chrono::Utc::now() + chrono::Duration::days(overlap_days);
 
-    for key in &active_keys {
-        if key.label == body.key_label {
-            state
-                .db
-                .api_key_set_expires(&key.key_hash, expires_at)
-                .await
-                .map_err(into_api_error)?;
-            old_expires_at = Some(expires_at);
-            old_label = Some(key.label.clone());
-            tracing::info!(
-                label = %key.label,
-                expires_at = %expires_at,
-                "API key scheduled for expiry (rotation overlap window)"
-            );
-        }
-    }
+    // Expire the old key(s) and insert the new one atomically so a failure
+    // never leaves the old key expiring with no replacement.
+    let mut tx = state.db.pool().begin().await.map_err(|e| into_api_error(e.into()))?;
 
-    // Insert the new key.
-    state
-        .db
-        .api_key_insert(&new_hash, &body.key_label)
+    let expired: Vec<String> = sqlx::query_scalar(
+        "UPDATE api_keys SET expires_at = $1
+         WHERE label = $2 AND revoked_at IS NULL
+           AND (expires_at IS NULL OR expires_at > NOW())
+         RETURNING label",
+    )
+    .bind(expires_at)
+    .bind(&body.key_label)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|e| into_api_error(e.into()))?;
+
+    sqlx::query("INSERT INTO api_keys (key_hash, label) VALUES ($1, $2)")
+        .bind(&new_hash)
+        .bind(&body.key_label)
+        .execute(&mut *tx)
         .await
-        .map_err(into_api_error)?;
+        .map_err(|e| into_api_error(e.into()))?;
+
+    tx.commit().await.map_err(|e| into_api_error(e.into()))?;
+
+    let (old_expires_at, old_label) = match expired.into_iter().next() {
+        Some(label) => (Some(expires_at), Some(label)),
+        None => (None, None),
+    };
 
     tracing::info!(label = %body.key_label, "New API key issued");
 
@@ -1911,6 +2184,81 @@ pub async fn rotate_api_key(
             old_key_label: old_label,
         }),
     ))
+}
+
+/// DELETE /api/v1/admin/api-keys/{id}
+///
+/// Revokes an API key immediately by setting `revoked_at`.  Keys are validated
+/// against the database on every request (no in-process cache), so the
+/// revocation takes effect at once.
+pub async fn revoke_api_key(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let revoked = state
+        .db
+        .api_key_revoke(id)
+        .await
+        .map_err(into_api_error)?;
+    if !revoked {
+        return Err(ApiError::not_found("API key not found or already revoked"));
+    }
+
+    let entry = crate::audit::AuditLogEntry {
+        id: None,
+        timestamp: chrono::Utc::now(),
+        actor: "admin".to_string(),
+        actor_ip: None,
+        action: "api_key_revoke".to_string(),
+        resource_type: "api_key".to_string(),
+        resource_id: Some(id.to_string()),
+        details: None,
+        status: crate::audit::AuditStatus::Success,
+        error_message: None,
+        request_id: None,
+        user_agent: None,
+    };
+    if let Err(e) = state.audit_logger.log(entry).await {
+        tracing::error!("Failed to write api-key revoke audit log: {e}");
+    }
+    tracing::info!(key_id = %id, "API key revoked");
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Returns true if `s` is a valid Stellar public key (`G…`, 56 chars, base32 + CRC16 checksum).
+fn is_valid_stellar_public_key(s: &str) -> bool {
+    if s.len() != 56 || !s.starts_with('G') {
+        return false;
+    }
+    let mut bits: u32 = 0;
+    let mut nbits = 0;
+    let mut bytes = Vec::with_capacity(35);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'2'..=b'7' => c - b'2' + 26,
+            _ => return false,
+        } as u32;
+        bits = (bits << 5) | v;
+        nbits += 5;
+        if nbits >= 8 {
+            nbits -= 8;
+            bytes.push((bits >> nbits) as u8);
+            bits &= (1 << nbits) - 1;
+        }
+    }
+    if bytes.len() != 35 || bytes[0] != 6 << 3 {
+        return false;
+    }
+    let mut crc: u16 = 0;
+    for &b in &bytes[..33] {
+        crc ^= (b as u16) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 { (crc << 1) ^ 0x1021 } else { crc << 1 };
+        }
+    }
+    crc.to_le_bytes() == [bytes[33], bytes[34]]
 }
 
 /// Response item for GET /api/v1/admin/api-keys
@@ -1956,6 +2304,18 @@ pub async fn list_api_keys(
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+
+    #[test]
+    fn stellar_public_key_validation() {
+        assert!(is_valid_stellar_public_key(
+            "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZX"
+        ));
+        assert!(!is_valid_stellar_public_key(
+            "GAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB7JZY"
+        ));
+        assert!(!is_valid_stellar_public_key("short"));
+        assert!(!is_valid_stellar_public_key(&"G".repeat(56)));
+    }
 
     /// The HTTP response body from ApiError::internal must never contain the
     /// underlying error message — only a generic sanitised string.
@@ -2087,5 +2447,13 @@ mod tests {
             elapsed <= Duration::from_millis(100),
             "concurrent checks must complete in one delay slot, not two (elapsed={elapsed:?})"
         );
+    }
+
+    #[test]
+    fn disposable_email_matches_registrable_domain() {
+        assert!(is_disposable_email("a@mailinator.com"));
+        assert!(is_disposable_email("a@Sub.YopMail.com"));
+        assert!(!is_disposable_email("a@notmailinator.com"));
+        assert!(!is_disposable_email("a@gmail.com"));
     }
 }

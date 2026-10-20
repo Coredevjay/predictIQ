@@ -22,6 +22,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_sql_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/database/migrations");
+        let registered: std::collections::HashSet<&str> =
+            MIGRATIONS.iter().map(|m| m.name).collect();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("sql") {
+                continue;
+            }
+            let stem = path.file_stem().unwrap().to_str().unwrap().to_string();
+            assert!(registered.contains(stem.as_str()), "migration {stem} is not in MIGRATIONS");
+        }
+    }
+
+    #[test]
     fn warn_macro_is_in_scope() {
         // Verify that the warn! macro compiles and runs without panic.
         warn!(test = "migration_warn_scope", "warn! is available in migrations module");
@@ -106,9 +121,49 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../database/migrations/008_create_email_tracking.sql"),
     },
     Migration {
+        version: "009",
+        name: "009_add_newsletter_indexes",
+        sql: include_str!("../database/migrations/009_add_newsletter_indexes.sql"),
+    },
+    Migration {
+        version: "010",
+        name: "010_add_soft_delete_newsletter",
+        sql: include_str!("../database/migrations/010_add_soft_delete_newsletter.sql"),
+    },
+    Migration {
+        version: "010b",
+        name: "010_create_audit_log",
+        sql: include_str!("../database/migrations/010_create_audit_log.sql"),
+    },
+    Migration {
         version: "011",
         name: "011_create_markets",
         sql: include_str!("../database/migrations/011_create_markets.sql"),
+    },
+    Migration {
+        version: "012",
+        name: "012_add_performance_indexes",
+        sql: include_str!("../database/migrations/012_add_performance_indexes.sql"),
+    },
+    Migration {
+        version: "013",
+        name: "013_add_email_queue_composite_index",
+        sql: include_str!("../database/migrations/013_add_email_queue_composite_index.sql"),
+    },
+    Migration {
+        version: "014",
+        name: "014_add_email_events_composite_index",
+        sql: include_str!("../database/migrations/014_add_email_events_composite_index.sql"),
+    },
+    Migration {
+        version: "015",
+        name: "015_add_newsletter_cleanup_index",
+        sql: include_str!("../database/migrations/015_add_newsletter_cleanup_index.sql"),
+    },
+    Migration {
+        version: "016",
+        name: "016_add_markets_deadline_index",
+        sql: include_str!("../database/migrations/016_add_markets_deadline_index.sql"),
     },
     Migration {
         version: "017",
@@ -126,6 +181,21 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../database/migrations/017_add_analytics_events_market_id.sql"),
     },
     Migration {
+        version: "017d",
+        name: "017_create_api_keys",
+        sql: include_str!("../database/migrations/017_create_api_keys.sql"),
+    },
+    Migration {
+        version: "017e",
+        name: "017_create_unsubscribe_tokens",
+        sql: include_str!("../database/migrations/017_create_unsubscribe_tokens.sql"),
+    },
+    Migration {
+        version: "017f",
+        name: "017_create_watched_transactions",
+        sql: include_str!("../database/migrations/017_create_watched_transactions.sql"),
+    },
+    Migration {
         version: "018",
         name: "018_add_email_tracking_email_status_index",
         sql: include_str!("../database/migrations/018_add_email_tracking_email_status_index.sql"),
@@ -141,9 +211,19 @@ const MIGRATIONS: &[Migration] = &[
         sql: include_str!("../database/migrations/019_add_newsletter_confirmed_at_index.sql"),
     },
     Migration {
+        version: "019b",
+        name: "019_create_watched_transactions",
+        sql: include_str!("../database/migrations/019_create_watched_transactions.sql"),
+    },
+    Migration {
         version: "020",
         name: "020_add_audit_log_actor_time_index",
         sql: include_str!("../database/migrations/020_add_audit_log_actor_time_index.sql"),
+    },
+    Migration {
+        version: "021",
+        name: "021_markets_total_volume_numeric",
+        sql: include_str!("../database/migrations/021_markets_total_volume_numeric.sql"),
     },
     Migration {
         version: "022",

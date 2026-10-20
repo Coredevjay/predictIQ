@@ -160,7 +160,7 @@ fn test_conditional_market_chain() {
 
     let oracle_config = predict_iq::types::OracleConfig {
         oracle_address: Address::generate(&env),
-        feed_id: String::from_str(&env, "test"),
+        feed_id: String::from_str(&env, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
     };
 
