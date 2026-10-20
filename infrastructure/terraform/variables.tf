@@ -245,7 +245,8 @@ variable "api_signing_key" {
   validation {
     condition     = length(var.api_signing_key) >= 32
     error_message = "API signing key must be at least 32 characters."
-
+  }
+}
 
 variable "app_env" {
   description = "Runtime APP_ENV/RUST_ENV for the API (development, staging, production)"
@@ -303,4 +304,16 @@ variable "email_idempotency_secret" {
   description = "EMAIL_IDEMPOTENCY_SECRET. Stored in Secrets Manager."
   type        = string
   sensitive   = true
+}
+
+variable "alert_email_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "Email addresses subscribed to the alerts SNS topic."
+}
+
+variable "alert_https_endpoints" {
+  type        = list(string)
+  default     = []
+  description = "HTTPS endpoints (PagerDuty/Slack) subscribed to the alerts SNS topic."
 }

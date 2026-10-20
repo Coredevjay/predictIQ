@@ -42,6 +42,18 @@ variable "deletion_protection" {
   default = false
 }
 
+variable "engine_version" {
+  type        = string
+  default     = "15"
+  description = "PostgreSQL major version; minor versions are upgraded automatically."
+}
+
+variable "kms_key_id" {
+  type        = string
+  default     = null
+  description = "ARN of a customer-managed KMS key for storage and Performance Insights encryption (null = AWS-managed key)."
+}
+
 variable "ecs_tasks_sg_id" {
   type        = string
   description = "Security group ID of the ECS tasks that are allowed to connect"
@@ -91,10 +103,12 @@ resource "aws_security_group" "rds" {
 resource "aws_db_instance" "main" {
   identifier            = "predictiq-${var.environment}"
   engine                = "postgres"
-  engine_version        = "15.3"
+  engine_version        = var.engine_version
+  auto_minor_version_upgrade = true
   instance_class        = var.db_instance_class
   allocated_storage     = var.allocated_storage
   storage_encrypted     = true
+  kms_key_id            = var.kms_key_id
   db_name               = var.db_name
   username              = var.db_username
   password              = var.db_password
@@ -109,7 +123,11 @@ resource "aws_db_instance" "main" {
   multi_az               = var.environment == "prod" ? true : false
   publicly_accessible    = false
   skip_final_snapshot    = var.environment != "prod"
-  final_snapshot_identifier = var.environment == "prod" ? "predictiq-${var.environment}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}" : null
+  final_snapshot_identifier = var.environment == "prod" ? "predictiq-${var.environment}-final-snapshot" : null
+
+  performance_insights_enabled    = true
+  performance_insights_kms_key_id = var.kms_key_id
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   tags = merge(
     local.common_tags,
@@ -135,10 +153,5 @@ output "address" {
 
 output "endpoint" {
   value     = aws_db_instance.main.endpoint
-  sensitive = true
-}
-
-output "database_url" {
-  value     = "postgresql://${var.db_username}:${var.db_password}@${aws_db_instance.main.endpoint}/${var.db_name}"
   sensitive = true
 }

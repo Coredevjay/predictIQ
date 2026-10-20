@@ -35,6 +35,7 @@ use crate::pagination::PaginationQuery;
         crate::handlers::featured_markets,
         crate::handlers::content,
         crate::handlers::resolve_market,
+        crate::handlers::cancel_market,
         crate::handlers::blockchain_health,
         crate::handlers::blockchain_market_data,
         crate::handlers::blockchain_platform_stats,

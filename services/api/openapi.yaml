@@ -55,6 +55,153 @@ paths:
         "500":
           $ref: "#/components/responses/ApiError"
 
+  /health/live:
+    get:
+      tags: [health]
+      operationId: getHealthLive
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /health/ready:
+    get:
+      tags: [health]
+      operationId: getHealthReady
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          $ref: "#/components/responses/ApiError"
+
+  /health/dependencies:
+    get:
+      tags: [health]
+      operationId: getHealthDependencies
+      summary: Dependency health (database, cache, RPC)
+      responses:
+        "200":
+          description: Dependency status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "503":
+          $ref: "#/components/responses/ApiError"
+
+  /metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Metrics in Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/newsletter/gdpr/request-token:
+    post:
+      tags: [newsletter]
+      operationId: newsletterGdprRequestToken
+      summary: Request a GDPR verification token by email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+      responses:
+        "200":
+          description: Verification email sent if the address is subscribed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "400":
+          $ref: "#/components/responses/NewsletterResponse"
+        "429":
+          $ref: "#/components/responses/NewsletterResponse"
+
+  /api/v1/admin/api-keys:
+    get:
+      tags: [audit]
+      operationId: listApiKeys
+      summary: List active API keys (admin)
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Active API keys
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
+  /api/v1/admin/api-keys/rotate:
+    post:
+      tags: [audit]
+      operationId: rotateApiKey
+      summary: Issue a new API key and expire the old one after an overlap window (admin)
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnyObject"
+      responses:
+        "201":
+          description: New key issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnyObject"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
+  /api/v1/admin/api-keys/{id}:
+    delete:
+      tags: [audit]
+      operationId: revokeApiKey
+      summary: Revoke an API key immediately (admin)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Key revoked
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
   /api/v1/statistics:
     get:
       tags: [markets]
@@ -154,6 +301,36 @@ paths:
         "500":
           $ref: "#/components/responses/ApiError"
 
+  /api/v1/markets/{market_id}/cancel:
+    post:
+      tags: [markets]
+      operationId: cancelMarket
+      summary: Cancel a market and invalidate caches (admin)
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: "#/components/parameters/marketId"
+        - $ref: "#/components/parameters/apiVersion"
+      responses:
+        "200":
+          description: Cache invalidation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvalidationResult"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/ApiError"
+        "500":
+          $ref: "#/components/responses/ApiError"
+
   /api/v1/blockchain/health:
     get:
       tags: [blockchain]
@@ -189,6 +366,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BlockchainHealth"
+
+  /api/v1/blockchain/markets:
+    post:
+      tags: [blockchain]
+      operationId: createMarket
+      summary: Create a prediction market (wallet-signing required — see #77)
+      description: |
+        Registers a new prediction market.
+
+        **Status: 501 Not Implemented**
+
+        The full market-creation flow requires the caller to sign the Stellar
+        transaction with their wallet private key. The API server does not hold
+        user keys, so this step cannot be completed server-side until the
+        wallet-signing integration described in issue #77 is implemented.
+
+        Until then:
+        - The route **exists** and validates the request body (no more 404/405).
+        - A `501 Not Implemented` response is returned with a clear message.
+        - Callers should build and sign the `CreateMarket` contract-invocation
+          transaction directly with the Stellar SDK and submit it via Soroban RPC.
+      parameters:
+        - $ref: "#/components/parameters/apiVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMarketRequest"
+      responses:
+        "400":
+          description: Validation error (missing/invalid fields)
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/ApiError"
+        "501":
+          description: Not yet implemented — use the Stellar SDK for wallet-signed market creation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateMarketResponse"
 
   /api/v1/blockchain/markets/{market_id}:
     get:
@@ -246,7 +464,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Stellar address of the user
+          description: Stellar public key (G…, 56 chars, valid checksum)
         - $ref: "#/components/parameters/apiVersion"
         - $ref: "#/components/parameters/page"
         - $ref: "#/components/parameters/pageSize"
@@ -958,6 +1176,93 @@ components:
           type: string
         message_id:
           type: string
+
+    OracleConfigRequest:
+      type: object
+      required: [oracle_address, feed_id, max_staleness_seconds, max_confidence_bps]
+      properties:
+        oracle_address:
+          type: string
+          description: Stellar account address of the oracle contract.
+        feed_id:
+          type: string
+          description: Feed identifier used by the oracle (e.g. "BTC/USD").
+        max_staleness_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Maximum age of an accepted oracle reading, in seconds.
+        max_confidence_bps:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Maximum confidence band accepted from the oracle, in basis points.
+
+    CreateMarketRequest:
+      type: object
+      required:
+        - creator
+        - description
+        - options
+        - deadline
+        - resolution_deadline
+        - oracle_config
+        - tier
+        - native_token
+        - parent_id
+        - parent_outcome_idx
+      properties:
+        creator:
+          type: string
+          description: Stellar account address that will be recorded as the market creator.
+        description:
+          type: string
+          description: Human-readable description of the prediction question.
+        options:
+          type: array
+          items:
+            type: string
+          minItems: 2
+          description: Ordered list of outcome labels (minimum 2).
+        deadline:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Unix timestamp (seconds) at which the market stops accepting bets. Must be in the future.
+        resolution_deadline:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Unix timestamp (seconds) after which the oracle may resolve the market. Must be at least `deadline + 86400`.
+        oracle_config:
+          $ref: "#/components/schemas/OracleConfigRequest"
+        tier:
+          type: string
+          enum: [Basic, Pro, Institutional]
+          description: Market tier.
+        native_token:
+          type: string
+          description: Native token contract address used for payouts.
+        parent_id:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Parent market ID for conditional markets (0 = top-level market).
+        parent_outcome_idx:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Outcome index within the parent market that activates this market.
+
+    CreateMarketResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+          description: Human-readable explanation of why the request could not be completed server-side.
 
   responses:
     ApiError:

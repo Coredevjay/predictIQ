@@ -483,8 +483,7 @@ impl Config {
 
         Self {
             bind_addr,
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            redis_url: redis_url_from_env(),
             db_credentials,
             database_url,
             hmac_key: env::var("HMAC_KEY").unwrap_or_default(),
@@ -2270,5 +2269,49 @@ mod tests {
         };
 
         assert!(schema.validate().is_ok());
+    }
+}
+
+/// Percent-encode a URL userinfo component (RFC 3986 unreserved chars kept).
+fn percent_encode_userinfo(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{:02X}", b),
+        })
+        .collect()
+}
+
+/// Resolve the Redis URL: `REDIS_URL` wins; otherwise assemble it at runtime
+/// from `REDIS_HOST`/`REDIS_PORT`/`REDIS_AUTH_TOKEN` (injected from Secrets
+/// Manager) so the credential-bearing URL never lands in Terraform state.
+fn redis_url_from_env() -> String {
+    if let Ok(url) = env::var("REDIS_URL") {
+        return url;
+    }
+    match env::var("REDIS_HOST") {
+        Ok(host) if !host.is_empty() => {
+            let port = env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
+            let auth = env::var("REDIS_AUTH_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .map(|t| format!(":{}@", percent_encode_userinfo(&t)))
+                .unwrap_or_default();
+            format!("rediss://{auth}{host}:{port}")
+        }
+        _ => "redis://127.0.0.1:6379".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod redis_url_tests {
+    use super::percent_encode_userinfo;
+
+    #[test]
+    fn encodes_reserved_chars() {
+        assert_eq!(percent_encode_userinfo("a:b@c/d"), "a%3Ab%40c%2Fd");
+        assert_eq!(percent_encode_userinfo("Az09-._~"), "Az09-._~");
     }
 }

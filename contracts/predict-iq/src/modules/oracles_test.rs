@@ -36,7 +36,7 @@ use soroban_sdk::{Address, Env, String};
 fn test_config(e: &Env) -> OracleConfig {
     OracleConfig {
         oracle_address: Address::generate(e),
-        feed_id: String::from_str(e, "test_feed"),
+        feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 300,
         max_confidence_bps: 200,
@@ -47,7 +47,7 @@ fn test_config(e: &Env) -> OracleConfig {
 fn create_config(e: &Env, max_confidence_bps: u64) -> OracleConfig {
     OracleConfig {
         oracle_address: Address::generate(e),
-        feed_id: String::from_str(e, "test_feed"),
+        feed_id: String::from_str(e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(1),
         max_staleness_seconds: 3600,
         max_confidence_bps,
@@ -956,7 +956,7 @@ fn test_consensus_non_contiguous_outcome_ids_picks_correct_winner() {
 
     let config = OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(4),
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -1001,7 +1001,7 @@ fn test_consensus_high_outcome_id_wins_over_low_outcome_id() {
 
     let config = OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(3),
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -1040,7 +1040,7 @@ fn test_consensus_binary_market_unchanged() {
 
     let config = OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(3),
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -1070,7 +1070,7 @@ fn test_consensus_binary_market_unanimous_outcome_zero() {
 
     let config = OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(2),
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,
@@ -1094,7 +1094,7 @@ fn test_consensus_insufficient_responses_returns_error() {
 
     let config = OracleConfig {
         oracle_address: Address::generate(&e),
-        feed_id: String::from_str(&e, "test_feed"),
+        feed_id: String::from_str(&e, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
         min_responses: Some(3),
         max_staleness_seconds: 3600,
         max_confidence_bps: 200,

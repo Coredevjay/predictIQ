@@ -3,7 +3,7 @@
 import React from 'react';
 import { useRouter } from 'next/navigation';
 import { getEnvConfig } from '@/lib/env';
-import { getConnectedWalletAddress } from '@/lib/wallet';
+import { useWallet } from '@/lib/wallet/WalletProvider';
 import { getSupportedAsset } from '@/lib/assets';
 import { TokenSelector } from '@/components/markets/TokenSelector';
 import {
@@ -20,6 +20,14 @@ const EMPTY_FORM: MarketFormValues = {
   outcomes: ['', ''],
   closeTime: '',
   asset: '',
+  resolutionDeadline: '',
+  oracleAddress: '',
+  feedId: '',
+  maxStalenessSeconds: 300,
+  maxConfidenceBps: 100,
+  tier: 'Basic',
+  parentId: 0,
+  parentOutcomeIdx: 0,
 };
 
 interface CreateMarketResponse {
@@ -30,6 +38,7 @@ interface CreateMarketResponse {
 
 export default function CreateMarketPage() {
   const router = useRouter();
+  const { address: walletAddress } = useWallet();
   const [values, setValues] = React.useState<MarketFormValues>(EMPTY_FORM);
   const [errors, setErrors] = React.useState<MarketFormErrors>({});
   const [submitting, setSubmitting] = React.useState(false);
@@ -67,7 +76,7 @@ export default function CreateMarketPage() {
       return;
     }
 
-    const wallet = getConnectedWalletAddress();
+    const wallet = walletAddress;
     if (!wallet) {
       setErrors({ form: 'Connect a wallet before creating a market.' });
       return;
@@ -78,18 +87,33 @@ export default function CreateMarketPage() {
     try {
       const parsed = marketFormSchema.parse(values);
       const config = getEnvConfig();
-      const res = await fetch(`${config.NEXT_PUBLIC_API_URL.replace(/\/$/, '')}/api/v1/blockchain/markets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          creator: wallet,
-          title: parsed.title,
-          description: parsed.description,
-          outcomes: parsed.outcomes,
-          ends_at: new Date(parsed.closeTime).toISOString(),
-          settlement_asset: getSupportedAsset(parsed.asset)?.address,
-        }),
-      });
+      // NOTE: Wallet signing for the on-chain transaction is tracked under #77.
+      const res = await fetch(
+        `${config.NEXT_PUBLIC_API_URL.replace(/\/$/, '')}/api/v1/blockchain/markets`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            creator: wallet,
+            description: parsed.description,
+            options: parsed.outcomes,
+            deadline: Math.floor(new Date(parsed.closeTime).getTime() / 1000),
+            resolution_deadline: Math.floor(
+              new Date(parsed.resolutionDeadline).getTime() / 1000
+            ),
+            oracle_config: {
+              oracle_address: parsed.oracleAddress,
+              feed_id: parsed.feedId,
+              max_staleness_seconds: parsed.maxStalenessSeconds,
+              max_confidence_bps: parsed.maxConfidenceBps,
+            },
+            tier: parsed.tier,
+            native_token: getSupportedAsset(parsed.asset)?.address,
+            parent_id: parsed.parentId ?? 0,
+            parent_outcome_idx: parsed.parentOutcomeIdx ?? 0,
+          }),
+        }
+      );
 
       if (!res.ok) {
         throw new Error(`Failed to create market (${res.status})`);
@@ -216,6 +240,30 @@ export default function CreateMarketPage() {
         </div>
 
         <div className="market-create__field">
+          <label htmlFor="market-resolution-deadline">Resolution deadline</label>
+          <input
+            id="market-resolution-deadline"
+            name="resolutionDeadline"
+            type="datetime-local"
+            value={values.resolutionDeadline}
+            onChange={(e) => setField('resolutionDeadline', e.target.value)}
+            aria-invalid={Boolean(errors.resolutionDeadline)}
+            aria-describedby={
+              errors.resolutionDeadline ? 'market-resolution-deadline-error' : undefined
+            }
+          />
+          {errors.resolutionDeadline && (
+            <span
+              id="market-resolution-deadline-error"
+              className="market-create__error"
+              role="alert"
+            >
+              {errors.resolutionDeadline}
+            </span>
+          )}
+        </div>
+
+        <div className="market-create__field">
           <label htmlFor="market-asset">Settlement asset</label>
           <TokenSelector
             id="market-asset"
@@ -230,6 +278,171 @@ export default function CreateMarketPage() {
             </span>
           )}
         </div>
+
+        <div className="market-create__field">
+          <label htmlFor="market-tier">Market tier</label>
+          <select
+            id="market-tier"
+            name="tier"
+            value={values.tier}
+            onChange={(e) => setField('tier', e.target.value as MarketFormValues['tier'])}
+            aria-invalid={Boolean(errors.tier)}
+            aria-describedby={errors.tier ? 'market-tier-error' : undefined}
+          >
+            <option value="Basic">Basic</option>
+            <option value="Pro">Pro</option>
+            <option value="Institutional">Institutional</option>
+          </select>
+          {errors.tier && (
+            <span id="market-tier-error" className="market-create__error" role="alert">
+              {errors.tier}
+            </span>
+          )}
+        </div>
+
+        <fieldset className="market-create__fieldset">
+          <legend>Oracle configuration</legend>
+
+          <div className="market-create__field">
+            <label htmlFor="market-oracle-address">Oracle contract address</label>
+            <input
+              id="market-oracle-address"
+              name="oracleAddress"
+              type="text"
+              value={values.oracleAddress}
+              onChange={(e) => setField('oracleAddress', e.target.value)}
+              aria-invalid={Boolean(errors.oracleAddress)}
+              aria-describedby={errors.oracleAddress ? 'market-oracle-address-error' : undefined}
+            />
+            {errors.oracleAddress && (
+              <span id="market-oracle-address-error" className="market-create__error" role="alert">
+                {errors.oracleAddress}
+              </span>
+            )}
+          </div>
+
+          <div className="market-create__field">
+            <label htmlFor="market-feed-id">Feed ID</label>
+            <input
+              id="market-feed-id"
+              name="feedId"
+              type="text"
+              value={values.feedId}
+              onChange={(e) => setField('feedId', e.target.value)}
+              aria-invalid={Boolean(errors.feedId)}
+              aria-describedby={errors.feedId ? 'market-feed-id-error' : undefined}
+            />
+            {errors.feedId && (
+              <span id="market-feed-id-error" className="market-create__error" role="alert">
+                {errors.feedId}
+              </span>
+            )}
+          </div>
+
+          <div className="market-create__field">
+            <label htmlFor="market-max-staleness">Max staleness (seconds)</label>
+            <input
+              id="market-max-staleness"
+              name="maxStalenessSeconds"
+              type="number"
+              min={1}
+              step={1}
+              value={values.maxStalenessSeconds}
+              onChange={(e) =>
+                setField('maxStalenessSeconds', parseInt(e.target.value, 10) || 0)
+              }
+              aria-invalid={Boolean(errors.maxStalenessSeconds)}
+              aria-describedby={
+                errors.maxStalenessSeconds ? 'market-max-staleness-error' : undefined
+              }
+            />
+            {errors.maxStalenessSeconds && (
+              <span id="market-max-staleness-error" className="market-create__error" role="alert">
+                {errors.maxStalenessSeconds}
+              </span>
+            )}
+          </div>
+
+          <div className="market-create__field">
+            <label htmlFor="market-max-confidence">Max confidence (basis points)</label>
+            <input
+              id="market-max-confidence"
+              name="maxConfidenceBps"
+              type="number"
+              min={0}
+              step={1}
+              value={values.maxConfidenceBps}
+              onChange={(e) =>
+                setField('maxConfidenceBps', parseInt(e.target.value, 10) || 0)
+              }
+              aria-invalid={Boolean(errors.maxConfidenceBps)}
+              aria-describedby={
+                errors.maxConfidenceBps ? 'market-max-confidence-error' : undefined
+              }
+            />
+            {errors.maxConfidenceBps && (
+              <span
+                id="market-max-confidence-error"
+                className="market-create__error"
+                role="alert"
+              >
+                {errors.maxConfidenceBps}
+              </span>
+            )}
+          </div>
+        </fieldset>
+
+        <fieldset className="market-create__fieldset">
+          <legend>Parent market (optional)</legend>
+
+          <div className="market-create__field">
+            <label htmlFor="market-parent-id">Parent market ID</label>
+            <input
+              id="market-parent-id"
+              name="parentId"
+              type="number"
+              min={0}
+              step={1}
+              value={values.parentId ?? 0}
+              onChange={(e) => setField('parentId', parseInt(e.target.value, 10) || 0)}
+              aria-invalid={Boolean(errors.parentId)}
+              aria-describedby={errors.parentId ? 'market-parent-id-error' : undefined}
+            />
+            {errors.parentId && (
+              <span id="market-parent-id-error" className="market-create__error" role="alert">
+                {errors.parentId}
+              </span>
+            )}
+          </div>
+
+          <div className="market-create__field">
+            <label htmlFor="market-parent-outcome-idx">Parent outcome index</label>
+            <input
+              id="market-parent-outcome-idx"
+              name="parentOutcomeIdx"
+              type="number"
+              min={0}
+              step={1}
+              value={values.parentOutcomeIdx ?? 0}
+              onChange={(e) =>
+                setField('parentOutcomeIdx', parseInt(e.target.value, 10) || 0)
+              }
+              aria-invalid={Boolean(errors.parentOutcomeIdx)}
+              aria-describedby={
+                errors.parentOutcomeIdx ? 'market-parent-outcome-idx-error' : undefined
+              }
+            />
+            {errors.parentOutcomeIdx && (
+              <span
+                id="market-parent-outcome-idx-error"
+                className="market-create__error"
+                role="alert"
+              >
+                {errors.parentOutcomeIdx}
+              </span>
+            )}
+          </div>
+        </fieldset>
 
         <button type="submit" className="market-create__submit" disabled={submitting}>
           {submitting ? 'Creating…' : 'Create market'}

@@ -210,8 +210,13 @@ pub async fn admin_rate_limit_middleware(
     req: axum::extract::Request,
     next: Next,
 ) -> Response {
-    use crate::security::{extract_client_ip, RateLimitConfig};
-    let ip = extract_client_ip(&headers, connect_info.as_ref(), true);
+    use crate::security::{extract_client_ip_cidrs, RateLimitConfig};
+    let ip = extract_client_ip_cidrs(
+        &headers,
+        connect_info.as_ref(),
+        state.config.trust_proxy,
+        &state.config.trusted_proxy_cidrs,
+    );
     let config = RateLimitConfig::new(
         state.config.admin_rate_limit_max,
         std::time::Duration::from_secs(state.config.admin_rate_limit_window_secs),
