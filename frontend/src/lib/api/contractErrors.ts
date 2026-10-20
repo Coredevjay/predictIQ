@@ -16,7 +16,7 @@
 import { ApiError, getContractErrorMessage } from './admin-client';
 
 /** The write flows that route through the shared contract-error presentation. */
-export type WriteAction = 'bet' | 'create' | 'cancel' | 'resolve';
+export type WriteAction = 'bet' | 'create' | 'cancel' | 'resolve' | 'dispute' | 'claim';
 
 const NOT_AUTHORIZED_CODE = 101;
 
@@ -25,6 +25,8 @@ const NOT_AUTHORIZED_MESSAGES: Record<WriteAction, string> = {
   create: 'You are not authorized to create this market.',
   cancel: 'You are not authorized to cancel this market.',
   resolve: 'You are not authorized to resolve this market.',
+  dispute: 'You are not authorized to file a dispute on this market.',
+  claim: 'You are not authorized to claim winnings for this bet.',
 };
 
 /**
@@ -173,5 +175,7 @@ export function getContractError(code: number): ContractError {
 
 /** Numeric codes this module knows a label for. Used by the drift test. */
 export function knownContractErrorCodes(): number[] {
-  return Object.keys(CONTRACT_ERROR_LABELS).map(Number).sort((a, b) => a - b);
+  return Object.keys(CONTRACT_ERROR_LABELS)
+    .map(Number)
+    .sort((a, b) => a - b);
 }
